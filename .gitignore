@@ -1,0 +1,82 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+.venv*/
+venv/
+env/
+ENV/
+*.venv
+.python-version
+
+# Packaging / build
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Logs
+*.log
+logs/
+
+# Test & coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+coverage.xml
+
+# Type checking / lint caches
+.mypy_cache/
+.pytype/
+.pyre/
+.ruff_cache/
+.dmypy.json
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.code-workspace
+
+# Environment / secrets
+.env
+.env.*
+.envrc
+.direnv/
+
+# OS/editor backups
+*~
+*.swp
+*.swo
+.nfs*
+
+# AWS CDK outputs and temp packages
+cdk.out/
+cdk/cdk.out/
+cdk/layer_package/
+cdk/layer_package_temp/
+cdk/lambda_package/
+cdk/lambda_package_temp/
+
+# Archives
+*.zip
+
+# uv cache
+.uv/
+.uv-cache/
+

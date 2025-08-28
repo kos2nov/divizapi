@@ -1,0 +1,26 @@
+# CDK asset staging directory
+.cdk.staging
+cdk.out
+cdk.context.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# Lambda package (generated during deployment)
+lambda_package/
+lambda_package_temp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

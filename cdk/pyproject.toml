@@ -1,0 +1,15 @@
+[project]
+name = "diviz-cdk"
+version = "1.0.0"
+description = "AWS CDK deployment for DiViz API"
+authors = [
+    {name = "Konstantyn Novoselov", email = "knovoselov@gmail.com"},
+]
+dependencies = [
+    "aws-cdk-lib==2.175.0",
+    "constructs>=10.0.0,<11.0.0",
+]
+requires-python = ">=3.11"
+
+[tool.uv]
+dev-dependencies = []
