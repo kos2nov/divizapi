@@ -7,8 +7,8 @@ app = cdk.App()
 
 DivizApiStack(app, "DivizApiStack",
     env=cdk.Environment(
-        account=os.getenv('CDK_DEFAULT_ACCOUNT'),
-        region=os.getenv('CDK_DEFAULT_REGION', 'us-east-2')
+        account='110007951910',
+        region='us-east-2'
     )
 )
 

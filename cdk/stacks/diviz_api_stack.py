@@ -5,6 +5,9 @@ from aws_cdk import (
     aws_apigateway as apigateway,
     aws_iam as iam,
     aws_cognito as cognito,
+    aws_certificatemanager as acm,
+    aws_route53 as route53,
+    aws_route53_targets as targets,
     Duration,
 )
 from constructs import Construct
@@ -34,13 +37,7 @@ class DivizApiStack(Stack):
             resources=["*"]
         ))
 
-        # Create Lambda layer for dependencies
-        dependencies_layer = lambda_.LayerVersion(
-            self, "DivizDependenciesLayer",
-            code=lambda_.Code.from_asset("layer_package"),
-            compatible_runtimes=[lambda_.Runtime.PYTHON_3_11],
-            description="DiViz API dependencies layer"
-        )
+
 
         # Create Lambda function with layer
         diviz_lambda = lambda_.Function(
@@ -49,7 +46,7 @@ class DivizApiStack(Stack):
             handler="lambda_handler.lambda_handler",
             code=lambda_.Code.from_asset("lambda_package"),
             role=lambda_role,
-            layers=[dependencies_layer],
+
             timeout=Duration.seconds(60),
             memory_size=1024,
             environment={
@@ -71,7 +68,13 @@ class DivizApiStack(Stack):
             cognito_user_pools=[user_pool]
         )
 
-        # Create API Gateway with throttling and caching
+        # Reference existing certificate for diviz.knovoselov.com
+        certificate = acm.Certificate.from_certificate_arn(
+            self, "DivizCertificate",
+            certificate_arn="arn:aws:acm:us-east-2:110007951910:certificate/d1e6d4ca-7ccc-4dfa-ba07-d1018291da65"
+        )
+
+        # Create API Gateway with custom domain
         api = apigateway.RestApi(
             self, "DivizApi",
             rest_api_name="DiViz API Service",
@@ -88,6 +91,32 @@ class DivizApiStack(Stack):
                 stage_name="prod",
                 throttling_rate_limit=10,
                 throttling_burst_limit=20
+            )
+        )
+
+        # Import existing custom domain
+        domain = apigateway.DomainName.from_domain_name_attributes(
+            self, "DivizApiDomain",
+            domain_name="diviz.knovoselov.com",
+            domain_name_alias_target="d-60kuz6b2f7.execute-api.us-east-2.amazonaws.com",
+            domain_name_alias_hosted_zone_id="ZOJJZC49E0EPZ"
+        )
+
+        # Note: Base path mapping already exists for this domain
+
+        # Reference existing hosted zone for knovoselov.com
+        hosted_zone = route53.HostedZone.from_lookup(
+            self, "KnovoselovZone",
+            domain_name="knovoselov.com"
+        )
+
+        # Create A record for diviz.knovoselov.com
+        route53.ARecord(
+            self, "DivizARecord",
+            zone=hosted_zone,
+            record_name="diviz",
+            target=route53.RecordTarget.from_alias(
+                targets.ApiGatewayDomain(domain)
             )
         )
 
@@ -109,11 +138,23 @@ class DivizApiStack(Stack):
         # Handle root path requests without auth
         api.root.add_method("ANY", lambda_integration)
 
-        # Output the API Gateway URL
+        # Output the API Gateway URLs
         cdk.CfnOutput(
             self, "ApiGatewayUrl",
             value=api.url,
             description="API Gateway endpoint URL for DiViz API"
+        )
+
+        cdk.CfnOutput(
+            self, "CustomDomainUrl",
+            value=f"https://{domain.domain_name}",
+            description="Custom domain URL for DiViz API"
+        )
+
+        cdk.CfnOutput(
+            self, "DomainAlias",
+            value=domain.domain_name_alias_domain_name,
+            description="CloudFront alias for Route53 CNAME record"
         )
 
         # Output Lambda function ARN
