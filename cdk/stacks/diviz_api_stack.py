@@ -4,6 +4,7 @@ from aws_cdk import (
     aws_lambda as lambda_,
     aws_apigateway as apigateway,
     aws_iam as iam,
+    aws_cognito as cognito,
     Duration,
 )
 from constructs import Construct
@@ -58,11 +59,26 @@ class DivizApiStack(Stack):
             }
         )
 
+        # Reference existing Cognito User Pool
+        user_pool = cognito.UserPool.from_user_pool_id(
+            self, "DivizUserPool",
+            user_pool_id="us-east-2_GSNdrKDXE"
+        )
+
+        # Create Cognito authorizer
+        cognito_authorizer = apigateway.CognitoUserPoolsAuthorizer(
+            self, "DivizCognitoAuthorizer",
+            cognito_user_pools=[user_pool]
+        )
+
         # Create API Gateway with throttling and caching
         api = apigateway.RestApi(
             self, "DivizApi",
             rest_api_name="DiViz API Service",
             description="API Gateway for DiViz meeting efficiency review service",
+            endpoint_configuration=apigateway.EndpointConfiguration(
+                types=[apigateway.EndpointType.REGIONAL]
+            ),
             default_cors_preflight_options=apigateway.CorsOptions(
                 allow_origins=apigateway.Cors.ALL_ORIGINS,
                 allow_methods=apigateway.Cors.ALL_METHODS,
@@ -81,11 +97,16 @@ class DivizApiStack(Stack):
             request_templates={"application/json": '{ "statusCode": "200" }'}
         )
 
-        # Add proxy resource to catch all requests
+        # Add proxy resource to catch all requests with Cognito auth
         proxy_resource = api.root.add_resource("{proxy+}")
-        proxy_resource.add_method("ANY", lambda_integration)
+        proxy_resource.add_method(
+            "ANY", 
+            lambda_integration,
+            authorizer=cognito_authorizer,
+            authorization_type=apigateway.AuthorizationType.COGNITO
+        )
         
-        # Also handle root path requests
+        # Handle root path requests without auth
         api.root.add_method("ANY", lambda_integration)
 
         # Output the API Gateway URL
@@ -100,4 +121,17 @@ class DivizApiStack(Stack):
             self, "LambdaFunctionArn",
             value=diviz_lambda.function_arn,
             description="Lambda function ARN for DiViz API"
+        )
+
+        # Output Cognito Auth URLs
+        cdk.CfnOutput(
+            self, "CognitoLoginUrl",
+            value="https://us-east-2gsndrkdxe.auth.us-east-2.amazoncognito.com/login",
+            description="Cognito Hosted UI login URL (add client_id and redirect_uri params)"
+        )
+
+        cdk.CfnOutput(
+            self, "CognitoLogoutUrl",
+            value="https://us-east-2gsndrkdxe.auth.us-east-2.amazoncognito.com/logout",
+            description="Cognito Hosted UI logout URL (add client_id and logout_uri params)"
         )

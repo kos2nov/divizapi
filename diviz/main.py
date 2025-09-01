@@ -1,5 +1,9 @@
-from fastapi import FastAPI, Query, HTTPException, Body
-from typing import Optional
+import os
+import time
+from typing import Optional, Dict, Any, List
+
+from fastapi import FastAPI, HTTPException, Body, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from diviz.user import User
 
@@ -9,6 +13,142 @@ app = FastAPI(
     description="A meeting efficiency review API service",
     version="0.0.1"
 )
+
+
+# ---------------------------
+# AWS Cognito Auth Utilities
+# ---------------------------
+class CognitoAuth:
+    def __init__(
+        self,
+        region: str,
+        user_pool_id: str,
+        app_client_id: Optional[str] = None,
+        allowed_groups: Optional[List[str]] = None,
+    ) -> None:
+        self.region = region
+        self.user_pool_id = user_pool_id
+        self.issuer = f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}"
+        self.jwks_uri = f"{self.issuer}/.well-known/jwks.json"
+        self.app_client_id = app_client_id
+        self.allowed_groups = set(allowed_groups or [])
+        self._jwks: Optional[Dict[str, Any]] = None
+        self._jwks_fetched_at: float = 0.0
+        self._jwks_ttl: float = 3600.0  # 1 hour cache
+
+    async def _fetch_jwks(self) -> Dict[str, Any]:
+        # Lazy import to avoid hard dependency during tests that don't hit auth
+        try:
+            import httpx  # type: ignore
+        except Exception:
+            raise HTTPException(status_code=500, detail="httpx not installed for JWKS fetch")
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(self.jwks_uri)
+            resp.raise_for_status()
+            return resp.json()
+
+    async def _get_jwks(self) -> Dict[str, Any]:
+        now = time.time()
+        if not self._jwks or (now - self._jwks_fetched_at) > self._jwks_ttl:
+            self._jwks = await self._fetch_jwks()
+            self._jwks_fetched_at = now
+        return self._jwks
+
+    async def verify_token(self, token: str) -> Dict[str, Any]:
+        # Lazy import to avoid hard dependency during tests that don't hit auth
+        try:
+            from jose import jwt  # type: ignore
+        except Exception:
+            raise HTTPException(status_code=500, detail="python-jose not installed for JWT verification")
+
+        # Get kid from header
+        try:
+            unverified_header = jwt.get_unverified_header(token)
+            kid = unverified_header.get("kid")
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid token header")
+
+        # Find the matching JWK
+        jwks = await self._get_jwks()
+        key = None
+        for k in jwks.get("keys", []):
+            if k.get("kid") == kid:
+                key = k
+                break
+        if not key:
+            raise HTTPException(status_code=401, detail="Public key not found")
+
+        # Verify token
+        options = {
+            "verify_aud": bool(self.app_client_id),  # verify aud only if provided
+            "verify_at_hash": False,
+        }
+        try:
+            claims = jwt.decode(
+                token,
+                key,
+                algorithms=["RS256"],
+                audience=self.app_client_id if self.app_client_id else None,
+                issuer=self.issuer,
+                options=options,
+            )
+        except Exception:
+            raise HTTPException(status_code=401, detail="Token verification failed")
+
+        # Additional Cognito-specific checks
+        token_use = claims.get("token_use")
+        if token_use not in {"id", "access"}:
+            raise HTTPException(status_code=401, detail="Invalid token use")
+
+        if self.app_client_id:
+            if token_use == "access":
+                client_id = claims.get("client_id")
+                if client_id != self.app_client_id:
+                    raise HTTPException(status_code=401, detail="Invalid client_id")
+            elif token_use == "id":
+                aud = claims.get("aud")
+                if aud != self.app_client_id:
+                    raise HTTPException(status_code=401, detail="Invalid audience")
+
+        # Authorization by groups if configured
+        if self.allowed_groups:
+            groups = set(claims.get("cognito:groups", []) or [])
+            if not groups.intersection(self.allowed_groups):
+                raise HTTPException(status_code=403, detail="Forbidden: insufficient group membership")
+
+        return claims
+
+
+# Read Cognito config from environment (set these in your deployment environment)
+COGNITO_REGION = os.getenv("COGNITO_REGION", 'us-east-2')
+COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID", "us-east-2_GSNdrKDXE")
+COGNITO_APP_CLIENT_ID = os.getenv("COGNITO_APP_CLIENT_ID", "5tb6pekknkes6eair7o39b3hh7")  # optional
+ALLOWED_GROUPS = [g.strip() for g in os.getenv("COGNITO_ALLOWED_GROUPS", "").split(",") if g.strip()]
+
+# Create auth helper only if minimal config provided
+cognito_auth: Optional[CognitoAuth] = None
+if COGNITO_REGION and COGNITO_USER_POOL_ID:
+    cognito_auth = CognitoAuth(
+        region=COGNITO_REGION,
+        user_pool_id=COGNITO_USER_POOL_ID,
+        app_client_id=COGNITO_APP_CLIENT_ID,
+        allowed_groups=ALLOWED_GROUPS,
+    )
+
+security = HTTPBearer(auto_error=False)
+
+
+async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Security(security)) -> Dict[str, Any]:
+    if not cognito_auth:
+        # Auth not configured; treat as unauthenticated environment
+        raise HTTPException(status_code=501, detail="Cognito auth not configured")
+
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+
+    token = credentials.credentials
+    return await cognito_auth.verify_token(token)
 
 
 @app.get("/")
@@ -24,16 +164,19 @@ async def root():
         }
     }
 
-users = []
 
-@app.post("/users")
-async def create_user(user: User = Body(..., description="User information")):
-    users.append(user)
-    return {"message": "User created", "total_users": len(users)}
+@app.get("/user")
+async def current_user(
+    current_user: Dict[str, Any] = Security(get_current_user),
+):
+    return {"current_user": current_user}
 
 
 @app.get("/review/gmeet/{google_meet}")
-async def review(google_meet: str):
+async def review(
+    google_meet: str,
+    current_user: Dict[str, Any] = Security(get_current_user),
+):
     return {"meeting_code": google_meet}
 
 
@@ -41,6 +184,7 @@ def main():
     """Main entry point for the application."""
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
 
 if __name__ == "__main__":
     main()

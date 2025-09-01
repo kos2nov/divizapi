@@ -70,7 +70,8 @@ cdk.out/
 cdk/cdk.out/
 cdk/layer_package/
 cdk/layer_package_temp/
-cdk/lambda_package/
+cdk/lambda_package/*
+!cdk/lambda_package/lambda_handler.py
 cdk/lambda_package_temp/
 
 # Archives

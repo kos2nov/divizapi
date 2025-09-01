@@ -41,3 +41,18 @@ class TestAPI:
         # Test ReDoc
         response = self.client.get("/redoc")
         assert response.status_code == 200
+
+
+    def test_user_endpoint_requires_auth_or_config(self):
+        """GET /user should require auth or return config error depending on environment."""
+        response = self.client.get("/user")
+        assert response.status_code in (401, 501)
+        detail = response.json().get("detail")
+        assert detail in ("Missing or invalid Authorization header", "Cognito auth not configured")
+
+    def test_review_endpoint_requires_auth_or_config(self):
+        """GET /review/gmeet/{code} should require auth or return config error depending on environment."""
+        response = self.client.get("/review/gmeet/abc-defg-hjk")
+        assert response.status_code in (401, 501)
+        detail = response.json().get("detail")
+        assert detail in ("Missing or invalid Authorization header", "Cognito auth not configured")
