@@ -22,23 +22,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // 1) Try to read from URL fragment (preferred on first load)
-    const hash = window.location.hash || "";
-    const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
-    const fragmentToken = params.get("access_token") || params.get("id_token");
-    if (fragmentToken) {
-      setToken(fragmentToken);
-      // Remove token from the address bar to avoid leaks
-      window.history.replaceState(null, "", window.location.pathname);
-      return;
-    }
+    const handleTokenUpdate = () => {
+      // 1) Try to read from URL fragment
+      const hash = window.location.hash || "";
+      const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
+      const fragmentToken = params.get("access_token") || params.get("id_token");
+      
+      if (fragmentToken) {
+        setToken(fragmentToken);
+        // Remove token from the address bar to avoid leaks
+        window.history.replaceState(null, "", window.location.pathname);
+        return;
+      }
 
-    // 2) Fallback to sessionStorage if present (persist across same-tab reloads)
-    const stored = sessionStorage.getItem(TOKEN_KEY);
-    if (stored) {
-      _setToken(stored);
-    }
-  }, []);
+      // 2) Fallback to sessionStorage if present (persist across same-tab reloads)
+      const stored = sessionStorage.getItem(TOKEN_KEY);
+      if (stored && stored !== token) {
+        _setToken(stored);
+      }
+    };
+
+    // Initial check
+    handleTokenUpdate();
+
+    // Listen for hash changes (for OAuth redirects)
+    window.addEventListener('hashchange', handleTokenUpdate);
+    
+    // Cleanup
+    return () => {
+      window.removeEventListener('hashchange', handleTokenUpdate);
+    };
+  }, [token]);
 
   const value = useMemo(() => ({ token, setToken }), [token]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

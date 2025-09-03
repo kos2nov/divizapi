@@ -10,6 +10,7 @@ function MeetForm() {
   const [result, setResult] = useState<any>(null)
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -29,9 +30,11 @@ function MeetForm() {
     }
   }
 
+  
+
   return (
-    <div>
-      <form onSubmit={onSubmit} style={{ display: 'flex', gap: 8 }}>
+    <>
+      <form onSubmit={onSubmit} style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
         <input
           type="text"
           value={code}
@@ -51,6 +54,69 @@ function MeetForm() {
           </pre>
         )}
       </div>
+    </>
+  )
+}
+
+
+function TokenPanel() {
+  const { token } = useAuth()
+  const [showToken, setShowToken] = useState(false)
+  const [decodedToken, setDecodedToken] = useState<any>(null)
+
+  useEffect(() => {
+    if (token) {
+      try {
+        const base64Url = token.split('.')[1]
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/')
+        const jsonPayload = decodeURIComponent(
+          atob(base64)
+            .split('')
+            .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+            .join('')
+        )
+        setDecodedToken(JSON.parse(jsonPayload))
+      } catch (e) {
+        console.error('Error decoding token:', e)
+        setDecodedToken(null)
+      }
+    } else {
+      setDecodedToken(null)
+    }
+  }, [token])
+
+  return (
+    <div>
+      <div 
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: token ? 'pointer' : 'default', marginBottom: showToken ? 12 : 0 }}
+        onClick={() => token && setShowToken(!showToken)}
+      >
+        <h2 style={{ fontSize: 20, margin: 0 }}>Authentication Token</h2>
+        <span>{token ? (showToken ? '▲' : '▼') : '🔒'}</span>
+      </div>
+
+      {token ? (
+        showToken && (
+          <div>
+            <div style={{ marginBottom: 12 }}>
+              <h4 style={{ margin: '8px 0' }}>Encoded</h4>
+              <div style={{ background: '#0b1220', border: '1px solid #334155', padding: '10px', borderRadius: 8, overflowWrap: 'break-word', fontSize: '0.9em' }}>
+                {token}
+              </div>
+            </div>
+            <div>
+              <h4 style={{ margin: '8px 0' }}>Decoded</h4>
+              <pre style={{ background: '#0b1220', border: '1px solid #334155', padding: '10px', borderRadius: 8, maxHeight: 300, overflow: 'auto', fontSize: '0.85em', margin: 0 }}>
+                {JSON.stringify(decodedToken, null, 2)}
+              </pre>
+            </div>
+          </div>
+        )
+      ) : (
+        <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>
+          No authentication token available. Please sign in to see token details.
+        </div>
+      )}
     </div>
   )
 }
@@ -81,7 +147,7 @@ export default function Page() {
       <header style={{ marginBottom: 24, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 28, margin: 0 }}>DiViz</h1>
-          <p style={{ color: '#94a3b8', marginTop: 8 }}>Modern SPA served by FastAPI</p>
+          <p style={{ color: '#94a3b8', marginTop: 8 }}>Meeting Efficiency Demo Application</p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <a
@@ -117,6 +183,9 @@ export default function Page() {
       <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16, marginTop: 16 }}>
         <h2 style={{ fontSize: 20, marginTop: 0, marginBottom: 12 }}>Meet</h2>
         <MeetForm />
+      </section>
+      <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16, marginTop: 16 }}>
+        <TokenPanel />
       </section>
     </main>
   )

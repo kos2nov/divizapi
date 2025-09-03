@@ -3,17 +3,34 @@ logger = logging.getLogger("diviz.main")
 logger.setLevel(logging.INFO)
 
 import base64
+import json
+import logging
 import os
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, Optional
 
 import httpx
-import uvicorn
-from fastapi import FastAPI, HTTPException, Security, Request
+from fastapi import FastAPI, HTTPException, Request, Security
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from diviz.auth import CognitoAuth
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import jwt
+from pydantic import BaseModel
 
+import os
+from . import user_repository
+from .auth.cognito_auth import CognitoAuth
 
+# Initialize CognitoAuth with environment variables
+cognito_auth = CognitoAuth(
+    region=os.getenv("COGNITO_REGION", "us-east-1"),
+    user_pool_id=os.getenv("COGNITO_USER_POOL_ID", ""),
+    app_client_id=os.getenv("COGNITO_APP_CLIENT_ID", "")
+)
+
+# For backward compatibility
+COGNITO_APP_CLIENT_ID = cognito_auth.app_client_id
+COGNITO_REGION = cognito_auth.region
+COGNITO_USER_POOL_ID = cognito_auth.user_pool_id
 
 # Create FastAPI app instance
 app = FastAPI(
@@ -167,6 +184,33 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
 
         tokens = token_response.json()
 
+    # Extract user info from ID token
+    id_token = tokens.get('id_token')
+    if id_token:
+        try:
+            # Verify the ID token using cognito_auth
+            claims = await cognito_auth.verify_token(id_token)
+            
+            # Extract user details
+            user_id = claims.get('sub')
+            email = claims.get('email')
+            username = claims.get('cognito:username') or claims.get('username')
+            
+            if user_id and email:
+                # Save or update user in repository
+                user = user_repository.save_user(
+                    user_id=user_id,
+                    email=email,
+                    username=username
+                )
+                logger.info("User saved to repository: %s (%s)", user_id, email)
+            
+        except HTTPException as he:
+            logger.error("Token verification failed: %s", str(he.detail))
+            raise
+        except Exception as e:
+            logger.error("Error processing ID token: %s", str(e), exc_info=True)
+
     # Create redirect response - use localhost for local dev
     if os.getenv("LOCAL_DEV") == "true":
         web_server_url = f"http://localhost:8000/static/index.html#access_token={tokens.get('access_token') or ''}"
@@ -174,8 +218,6 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
         web_server_url = f"https://diviz.knovoselov.com/static/index.html#access_token={tokens.get('access_token') or ''}"
 
     response = RedirectResponse(url=web_server_url)
-
-    logger.info("Auth tokens:  %s", tokens)
 
     return response
 
