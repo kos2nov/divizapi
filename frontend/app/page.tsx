@@ -1,34 +1,57 @@
 "use client";
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from './auth-context';
 
-import { useAuth } from './auth-context'
+type UserResp = { current_user?: Record<string, any>; detail?: string };
 
-type UserResp = { current_user?: Record<string, any>; detail?: string }
 function MeetForm() {
-  const { token } = useAuth()
-  const [code, setCode] = useState('')
-  const [result, setResult] = useState<any>(null)
-  const [err, setErr] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  
+  const { token } = useAuth();
+  const [code, setCode] = useState('');
+  const [result, setResult] = useState<any>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
 
   const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
-    setErr(null)
-    setResult(null)
+    e.preventDefault();
+    if (!token) {
+      setErr('Please log in first');
+      return;
+    }
+
+    setLoading(true);
+    setErr(null);
+    setResult(null);
+    
     try {
       const res = await fetch(`/api/meet/${encodeURIComponent(code)}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      })
-      const json = await res.json()
-      setResult(json)
+        method: 'GET',
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (res.status === 401) {
+        // Token might be expired, clear it and redirect to login
+        router.push('/login');
+        return;
+      }
+
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}));
+        throw new Error(error.detail || 'Request failed');
+      }
+
+      const json = await res.json();
+      setResult(json);
     } catch (e: any) {
-      setErr(e?.message || 'Request failed')
+      setErr(e?.message || 'Request failed');
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   
 
@@ -123,24 +146,55 @@ function TokenPanel() {
 
 
 export default function Page() {
-  const { token } = useAuth();
-  const [data, setData] = useState<UserResp | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { token, logout } = useAuth();
+  const [data, setData] = useState<UserResp | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+
+  const fetchUser = useCallback(async () => {
+    if (!token) {
+      setData(null);
+      setError('Not authenticated');
+      return;
+    }
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const res = await fetch('/api/user', {
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (res.status === 401) {
+        // Token might be expired, clear it and redirect to login
+        logout();
+        router.push('/login');
+        return;
+      }
+      
+      if (!res.ok) {
+        throw new Error('Failed to fetch user data');
+      }
+      
+      const json = await res.json();
+      setData(json);
+    } catch (err) {
+      console.error('Error fetching user:', err);
+      setError('Failed to load user data');
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [token, router, logout]);
 
   useEffect(() => {
-    const fetchUser = async () => {
-      try {
-        const res = await fetch('/api/user', {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        })
-        const json = await res.json()
-        setData(json)
-      } catch (e: any) {
-        setError(e?.message || 'Error fetching user')
-      }
-    }
-    fetchUser()
-  }, [])
+    fetchUser();
+  }, [fetchUser]);
 
   return (
     <main style={{ maxWidth: 960, margin: '40px auto', padding: '0 20px' }}>
@@ -150,27 +204,73 @@ export default function Page() {
           <p style={{ color: '#94a3b8', marginTop: 8 }}>Meeting Efficiency Demo Application</p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
-          <a
-            href="https://auth.diviz.knovoselov.com/login?client_id=5tb6pekknkes6eair7o39b3hh7&response_type=code&scope=email+openid+profile&redirect_uri=https%3A%2F%2Fdiviz.knovoselov.com%2Fauth%2Fcallback"
+        <a
+            href="https://auth.diviz.knovoselov.com/oauth2/authorize?identity_provider=Google&client_id=5tb6pekknkes6eair7o39b3hh7&response_type=code&redirect_uri=https://diviz.knovoselov.com/auth/callback&scope=email%20openid%20profile"
             style={{ background: '#1d4ed8', color: '#fff', padding: '8px 12px', borderRadius: 8, textDecoration: 'none', border: '1px solid #1e293b' }}
           >
-            Login
+            Google
           </a>
-          <button
-            onClick={() => {
-              // Clear in-memory/session token and redirect to Cognito logout
-              try { window.sessionStorage.removeItem('auth_token'); } catch {}
-              window.location.href = 'https://auth.diviz.knovoselov.com/logout?client_id=5tb6pekknkes6eair7o39b3hh7&logout_uri=https%3A%2F%2Fdiviz.knovoselov.com';
-            }}
-            style={{ background: 'transparent', color: '#e2e8f0', padding: '8px 12px', borderRadius: 8, textDecoration: 'none', border: '1px solid #334155' }}
-          >
-            Logout
-          </button>
+          {!token ? (
+            <a
+              href="https://auth.diviz.knovoselov.com/login?client_id=5tb6pekknkes6eair7o39b3hh7&response_type=code&scope=email+openid+profile&redirect_uri=https%3A%2F%2Fdiviz.knovoselov.com%2Fauth%2Fcallback"
+              style={{ background: '#1d4ed8', color: '#fff', padding: '8px 12px', borderRadius: 8, textDecoration: 'none', border: '1px solid #1e293b' }}
+            >
+              Login
+            </a>
+          ) : (
+            <button
+              onClick={() => {
+                logout();
+                window.location.href = 'https://auth.diviz.knovoselov.com/logout?client_id=5tb6pekknkes6eair7o39b3hh7&logout_uri=https%3A%2F%2Fdiviz.knovoselov.com%2Fstatic%2Findex.html';
+              }}
+              style={{ background: 'transparent', color: '#e2e8f0', padding: '8px 12px', borderRadius: 8, textDecoration: 'none', border: '1px solid #334155' }}
+            >
+              Logout
+            </button>
+          )}
         </div>
       </header>
 
       <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16 }}>
-        <h2 style={{ fontSize: 20, marginTop: 0, marginBottom: 12 }}>User</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h2 style={{ fontSize: 20, margin: 0 }}>User</h2>
+          <button 
+            onClick={fetchUser}
+            disabled={loading}
+            style={{
+              background: 'transparent',
+              border: '1px solid #334155',
+              color: '#e2e8f0',
+              borderRadius: 6,
+              padding: '4px 8px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              opacity: loading ? 0.7 : 1,
+              pointerEvents: loading ? 'none' : 'auto'
+            }}
+            title="Refresh user data"
+          >
+            <svg 
+              width="16" 
+              height="16" 
+              viewBox="0 0 24 24" 
+              fill="none" 
+              stroke="currentColor" 
+              strokeWidth="2" 
+              strokeLinecap="round" 
+              strokeLinejoin="round"
+              style={{
+                animation: loading ? 'spin 1s linear infinite' : 'none',
+                transformOrigin: 'center'
+              }}
+            >
+              <path d="M21.5 2v6h-6M2.5 22v-6h6M22 12.5a10 10 0 0 0-17-7.5M2 12.5a10 10 0 0 0 17 7.5"/>
+            </svg>
+            Refresh
+          </button>
+        </div>
         {!data && !error && <p>Loading...</p>}
         {error && <p style={{ color: '#fca5a5' }}>{error}</p>}
         {data && (
@@ -178,7 +278,12 @@ export default function Page() {
             {JSON.stringify(data, null, 2)}
           </pre>
         )}
-
+        <style jsx global>{`
+          @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+          }
+        `}</style>
       </section>
       <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16, marginTop: 16 }}>
         <h2 style={{ fontSize: 20, marginTop: 0, marginBottom: 12 }}>Meet</h2>

@@ -1,5 +1,5 @@
 import logging
-logger = logging.getLogger("diviz.main")
+logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 import base64
@@ -20,17 +20,6 @@ import os
 from . import user_repository
 from .auth.cognito_auth import CognitoAuth
 
-# Initialize CognitoAuth with environment variables
-cognito_auth = CognitoAuth(
-    region=os.getenv("COGNITO_REGION", "us-east-1"),
-    user_pool_id=os.getenv("COGNITO_USER_POOL_ID", ""),
-    app_client_id=os.getenv("COGNITO_APP_CLIENT_ID", "")
-)
-
-# For backward compatibility
-COGNITO_APP_CLIENT_ID = cognito_auth.app_client_id
-COGNITO_REGION = cognito_auth.region
-COGNITO_USER_POOL_ID = cognito_auth.user_pool_id
 
 # Create FastAPI app instance
 app = FastAPI(
@@ -39,7 +28,6 @@ app = FastAPI(
     version="0.0.1"
 )
 
-logger.info("**** Will mount static files")
 from fastapi.staticfiles import StaticFiles
 
 # Mount static Next.js export at /static if present
@@ -49,7 +37,6 @@ candidates = [
     os.path.abspath(os.path.join(os.path.dirname(__file__), "frontend", "out")),
 ]
 for d in candidates:
-    logger.info("Looking for static static files in %s", d)
 
     if os.path.isdir(d):
 
@@ -72,18 +59,14 @@ COGNITO_APP_CLIENT_ID = os.getenv("COGNITO_APP_CLIENT_ID", "5tb6pekknkes6eair7o3
 COGNITO_APP_CLIENT_SECRET = os.getenv("COGNITO_APP_CLIENT_SECRET", "11u11b0rsfm0h23bp3jllta5736h55ahmgvm4u7bgsglvv9r72l7")  # required for token exchange
 ALLOWED_GROUPS = [g.strip() for g in os.getenv("COGNITO_ALLOWED_GROUPS", "").split(",") if g.strip()]
 
-# Create auth helper only if minimal config provided
-cognito_auth: Optional[CognitoAuth] = None
-if COGNITO_REGION and COGNITO_USER_POOL_ID:
-    cognito_auth = CognitoAuth(
-        region=COGNITO_REGION,
-        user_pool_id=COGNITO_USER_POOL_ID,
-        app_client_id=COGNITO_APP_CLIENT_ID,
-        allowed_groups=ALLOWED_GROUPS,
-    )
+cognito_auth = CognitoAuth(
+    region=COGNITO_REGION,
+    user_pool_id=COGNITO_USER_POOL_ID,
+    app_client_id=COGNITO_APP_CLIENT_ID,
+    allowed_groups=ALLOWED_GROUPS,
+)
 
 security = HTTPBearer(auto_error=False)
-
 
 async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Security(security)) -> Dict[str, Any]:
     # Local development mode - bypass auth
@@ -92,14 +75,28 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
 
     if not cognito_auth:
         # Auth not configured; treat as unauthenticated environment
-        raise HTTPException(status_code=501, detail="Cognito auth not configured")
+        return {"sub": "no-auth", "email": "no-auth@example.com", "cognito:username": "no-auth"}
 
-    if credentials is None or credentials.scheme.lower() != "bearer":
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-
+    # Get token from Authorization header
+    if not credentials or not credentials.credentials:
+        raise HTTPException(status_code=401, detail="No authorization token provided")
+    
     token = credentials.credentials
-    return await cognito_auth.verify_token(token)
-
+    
+    try:
+        # Verify the token and get claims
+        claims = await cognito_auth.verify_token(token)
+        
+        # Log minimal user info for debugging
+        logger.info("Authenticated user: %s", claims.get('email'))
+        
+        return claims
+    except HTTPException as he:
+        logger.error("Token verification failed: %s", str(he.detail))
+        raise
+    except Exception as e:
+        logger.error("Error verifying token: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 @app.get("/")
 async def root():
@@ -127,9 +124,6 @@ if os.getenv("STAGE") == "prod":
         return response
 
 
-
-
-
 @app.get("/api/user")
 async def user(
     current_user: Dict[str, Any] = Security(get_current_user),
@@ -146,7 +140,7 @@ async def review(
     google_meet: str,
     current_user: Dict[str, Any] = Security(get_current_user),
 ):
-    return {"meeting_code": google_meet}
+    return {"meeting_code": google_meet, "current_user": current_user.get("email")}
 
 
 @app.get("/auth/callback")
@@ -163,7 +157,7 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
     # Create Basic auth header with client credentials
     auth_string = f"{COGNITO_APP_CLIENT_ID}:{COGNITO_APP_CLIENT_SECRET}"
     auth_bytes = base64.b64encode(auth_string.encode()).decode()
-
+    logger.info("Token exchange for code %s", code)
     async with httpx.AsyncClient() as client:
         token_response = await client.post(
             token_endpoint,
@@ -183,7 +177,7 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
             raise HTTPException(status_code=400, detail="Token exchange failed")
 
         tokens = token_response.json()
-
+        logger.info("Token exchange successful: %s", tokens)
     # Extract user info from ID token
     id_token = tokens.get('id_token')
     if id_token:
@@ -211,17 +205,27 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
         except Exception as e:
             logger.error("Error processing ID token: %s", str(e), exc_info=True)
 
-    # Create redirect response - use localhost for local dev
-    if os.getenv("LOCAL_DEV") == "true":
-        web_server_url = f"http://localhost:8000/static/index.html#access_token={tokens.get('access_token') or ''}"
-    else:
-        web_server_url = f"https://diviz.knovoselov.com/static/index.html#access_token={tokens.get('access_token') or ''}"
+    # Create redirect response with ID token
+    id_token = tokens.get('id_token')
+    if not id_token:
+        logger.error("No ID token in response from Cognito")
+        raise HTTPException(status_code=400, detail="No ID token received")
+
+    # Verify the ID token before using it
+    try:
+        claims = await cognito_auth.verify_token(id_token)
+        logger.info("ID token verified for user: %s", claims.get('email'))
+    except Exception as e:
+        logger.error("ID token verification failed: %s", str(e))
+        raise HTTPException(status_code=401, detail="Invalid ID token")
+
+    # Build redirect URL with ID token
+    base_url = "http://localhost:8000/static/index.html" if os.getenv("LOCAL_DEV") == "true" else "https://diviz.knovoselov.com/static/index.html"
+    web_server_url = f"{base_url}#id_token={id_token}"
 
     response = RedirectResponse(url=web_server_url)
 
     return response
-
-
 
 
 def main():
