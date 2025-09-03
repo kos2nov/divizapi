@@ -81,3 +81,14 @@ cdk/lambda_package_temp/
 .uv/
 .uv-cache/
 
+# Next.js
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
