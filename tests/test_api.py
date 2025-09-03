@@ -25,7 +25,7 @@ class TestAPI:
         assert data["service"] == "DiViz API Service"
         assert data["version"] == "0.0.1"
         assert "endpoints" in data
-        assert "/review" in data["endpoints"]
+        assert "/api/meet" in data["endpoints"]
 
 
     def test_api_documentation_endpoints(self):
@@ -44,15 +44,15 @@ class TestAPI:
 
 
     def test_user_endpoint_requires_auth_or_config(self):
-        """GET /user should require auth or return config error depending on environment."""
-        response = self.client.get("/user")
+        """GET /api/user should require auth or return config error depending on environment."""
+        response = self.client.get("/api/user")
         assert response.status_code in (401, 501)
         detail = response.json().get("detail")
         assert detail in ("Missing or invalid Authorization header", "Cognito auth not configured")
 
     def test_review_endpoint_requires_auth_or_config(self):
-        """GET /review/gmeet/{code} should require auth or return config error depending on environment."""
-        response = self.client.get("/review/gmeet/abc-defg-hjk")
+        """GET /api/meet/{code} should require auth or return config error depending on environment."""
+        response = self.client.get("/api/meet/abc-defg-hjk")
         assert response.status_code in (401, 501)
         detail = response.json().get("detail")
         assert detail in ("Missing or invalid Authorization header", "Cognito auth not configured")

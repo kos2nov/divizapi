@@ -126,21 +126,27 @@ class DivizApiStack(Stack):
             request_templates={"application/json": '{ "statusCode": "200" }'}
         )
 
-        # Add proxy resource to catch all requests with Cognito auth
-        proxy_resource = api.root.add_resource("{proxy+}")
-        proxy_resource.add_method(
-            "ANY", 
-            lambda_integration,
-            authorizer=cognito_authorizer,
-            authorization_type=apigateway.AuthorizationType.COGNITO
-        )
-        
         # Handle root path requests without auth
         api.root.add_method("ANY", lambda_integration)
+        # Public catch-all proxy for non-API routes (no auth)
+        proxy_resource = api.root.add_resource("{proxy+}")
+        proxy_resource.add_method("ANY", lambda_integration)
 
-        # Add callback resource for OAuth flow
-        callback_resource = api.root.add_resource("auth").add_resource("callback")
-        callback_resource.add_method("GET", lambda_integration)
+        # Secure /api and /api/* with Cognito authorizer
+        api_resource = api.root.add_resource("api")
+        api_resource.add_method(
+            "ANY",
+            lambda_integration,
+            authorizer=cognito_authorizer,
+            authorization_type=apigateway.AuthorizationType.COGNITO,
+        )
+        api_proxy = api_resource.add_resource("{proxy+}")
+        api_proxy.add_method(
+            "ANY",
+            lambda_integration,
+            authorizer=cognito_authorizer,
+            authorization_type=apigateway.AuthorizationType.COGNITO,
+        )
 
         # Output the API Gateway URLs
         cdk.CfnOutput(

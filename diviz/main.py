@@ -1,46 +1,19 @@
-import os
-import time
-from typing import Optional, Dict, Any, List
 import logging
-import httpx
-from jose import jwt
-import uvicorn
-import base64
-
 logger = logging.getLogger("diviz.main")
+logger.setLevel(logging.INFO)
 
+import base64
+import os
+from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, HTTPException, Body, Security, Request, Response
+import httpx
+import uvicorn
+from fastapi import FastAPI, HTTPException, Security, Request
 from fastapi.responses import RedirectResponse
-from fastapi.middleware.base import BaseHTTPMiddleware
-import urllib.parse
-
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from diviz.auth import CognitoAuth
 
-from diviz.user import User
 
-
-class CookieToHeaderMiddleware(BaseHTTPMiddleware):
-    """Middleware to extract JWT token from cookies and add to Authorization header"""
-    
-    async def dispatch(self, request: Request, call_next):
-        # Check if Authorization header is already present
-        if "authorization" not in request.headers:
-            # Try to get token from cookies
-            access_token = request.cookies.get("access_token")
-            id_token = request.cookies.get("id_token")
-            
-            # Prefer id_token for user info, fallback to access_token
-            token = id_token or access_token
-            
-            if token:
-                # Add Authorization header
-                request.headers.__dict__["_list"].append(
-                    (b"authorization", f"Bearer {token}".encode())
-                )
-        
-        response = await call_next(request)
-        return response
 
 # Create FastAPI app instance
 app = FastAPI(
@@ -49,102 +22,29 @@ app = FastAPI(
     version="0.0.1"
 )
 
-# Add cookie-to-header middleware
-app.add_middleware(CookieToHeaderMiddleware)
+logger.info("**** Will mount static files")
+from fastapi.staticfiles import StaticFiles
 
+# Mount static Next.js export at /static if present
+# Support two locations: local export and packaged in Lambda under diviz/../frontend/out
+candidates = [
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "out")),
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "frontend", "out")),
+]
+for d in candidates:
+    logger.info("Looking for static static files in %s", d)
 
-# ---------------------------
-# AWS Cognito Auth Utilities
-# ---------------------------
-class CognitoAuth:
-    def __init__(
-        self,
-        region: str,
-        user_pool_id: str,
-        app_client_id: Optional[str] = None,
-        allowed_groups: Optional[List[str]] = None,
-    ) -> None:
-        self.region = region
-        self.user_pool_id = user_pool_id
-        self.issuer = f"https://cognito-idp.{region}.amazonaws.com/{user_pool_id}"
-        self.jwks_uri = f"{self.issuer}/.well-known/jwks.json"
-        self.app_client_id = app_client_id
-        self.allowed_groups = set(allowed_groups or [])
-        self._jwks: Optional[Dict[str, Any]] = None
-        self._jwks_fetched_at: float = 0.0
-        self._jwks_ttl: float = 3600.0  # 1 hour cache
+    if os.path.isdir(d):
 
-    async def _fetch_jwks(self) -> Dict[str, Any]:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(self.jwks_uri)
-            resp.raise_for_status()
-            return resp.json()
-
-    async def _get_jwks(self) -> Dict[str, Any]:
-        now = time.time()
-        if not self._jwks or (now - self._jwks_fetched_at) > self._jwks_ttl:
-            self._jwks = await self._fetch_jwks()
-            self._jwks_fetched_at = now
-        return self._jwks
-
-    async def verify_token(self, token: str) -> Dict[str, Any]:
-        # Get kid from header
-        try:
-            logger.info("Verifying token: %s", token)
-            unverified_header = jwt.get_unverified_header(token)
-            kid = unverified_header.get("kid")
-        except Exception:
-            raise HTTPException(status_code=401, detail="Invalid token header")
-
-        # Find the matching JWK
-        jwks = await self._get_jwks()
-        key = None
-        for k in jwks.get("keys", []):
-            if k.get("kid") == kid:
-                key = k
-                break
-        if not key:
-            raise HTTPException(status_code=401, detail="Public key not found")
-
-        # Verify token
-        options = {
-            "verify_aud": bool(self.app_client_id),  # verify aud only if provided
-            "verify_at_hash": False,
-        }
-        try:
-            claims = jwt.decode(
-                token,
-                key,
-                algorithms=["RS256"],
-                audience=self.app_client_id if self.app_client_id else None,
-                issuer=self.issuer,
-                options=options,
-            )
-        except Exception:
-            raise HTTPException(status_code=401, detail="Token verification failed")
-
-        # Additional Cognito-specific checks
-        token_use = claims.get("token_use")
-        if token_use not in {"id", "access"}:
-            raise HTTPException(status_code=401, detail="Invalid token use")
-
-        if self.app_client_id:
-            if token_use == "access":
-                client_id = claims.get("client_id")
-                if client_id != self.app_client_id:
-                    raise HTTPException(status_code=401, detail="Invalid client_id")
-            elif token_use == "id":
-                aud = claims.get("aud")
-                if aud != self.app_client_id:
-                    raise HTTPException(status_code=401, detail="Invalid audience")
-
-        # Authorization by groups if configured
-        if self.allowed_groups:
-            groups = set(claims.get("cognito:groups", []) or [])
-            if not groups.intersection(self.allowed_groups):
-                raise HTTPException(status_code=403, detail="Forbidden: insufficient group membership")
-
-        return claims
+        app.mount("/static", StaticFiles(directory=d), name="static")
+        logger.info("Mounted static files from %s", d)
+        
+        # Redirect /static/ to /static/index.html
+        @app.get("/static/")
+        async def static_root():
+            return RedirectResponse(url="/static/index.html")
+        
+        break
 
 
 
@@ -172,7 +72,7 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
     # Local development mode - bypass auth
     if os.getenv("LOCAL_DEV") == "true":
         return {"sub": "local-user", "email": "dev@example.com", "cognito:username": "localdev"}
-    
+
     if not cognito_auth:
         # Auth not configured; treat as unauthenticated environment
         raise HTTPException(status_code=501, detail="Cognito auth not configured")
@@ -186,31 +86,45 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
 
 @app.get("/")
 async def root():
-    """
-    Root endpoint with basic service information.
-    """
     return {
         "service": "DiViz API Service",
         "version": "0.0.1",
         "endpoints": {
-            "/review/meet": "GET - google meet review",
-            "/user": "GET - current user info"
+            "/api/meet": "GET - meeting review"
         }
     }
 
+# Enforce HTTPS in production by redirecting HTTP requests and setting HSTS
+if os.getenv("STAGE") == "prod":
+    @app.middleware("http")
+    async def enforce_https_middleware(request: Request, call_next):
+        # Respect upstream protocol header from API Gateway/ALB/CloudFront
+        proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+        if proto and proto.lower() != "https":
+            # Redirect to HTTPS preserving path and query
+            url = request.url.replace(scheme="https")
+            return RedirectResponse(url=str(url), status_code=307)
+        response = await call_next(request)
+        # Add HSTS header for browsers
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+        return response
 
-@app.get("/user")
+
+
+
+
+@app.get("/api/user")
 async def user(
     current_user: Dict[str, Any] = Security(get_current_user),
 ):
     # Log minimal, non-sensitive user info for debugging
     uid = current_user.get("sub") or current_user.get("cognito:username") or current_user.get("username")
     email = current_user.get("email")
-    logger.info("/user accessed by uid=%s email=%s", uid, email)
+    logger.info("/api/user accessed by uid=%s email=%s", uid, email)
     return {"current_user": current_user}
 
 
-@app.get("/review/meet/{google_meet}")
+@app.get("/api/meet/{google_meet}")
 async def review(
     google_meet: str,
     current_user: Dict[str, Any] = Security(get_current_user),
@@ -225,14 +139,14 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
     """
     if not code:
         raise HTTPException(status_code=400, detail="Authorization code missing")
-    
+
     # Exchange code for tokens with Cognito
     token_endpoint = f"https://auth.diviz.knovoselov.com/oauth2/token"
-    
+
     # Create Basic auth header with client credentials
     auth_string = f"{COGNITO_APP_CLIENT_ID}:{COGNITO_APP_CLIENT_SECRET}"
     auth_bytes = base64.b64encode(auth_string.encode()).decode()
-    
+
     async with httpx.AsyncClient() as client:
         token_response = await client.post(
             token_endpoint,
@@ -246,46 +160,26 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
                 "Authorization": f"Basic {auth_bytes}"
             }
         )
-        
+
         if token_response.status_code != 200:
             logger.error("Token exchange failed: %s status:%s", token_response.text, token_response.status_code)
             raise HTTPException(status_code=400, detail="Token exchange failed")
-        
+
         tokens = token_response.json()
-    
+
     # Create redirect response - use localhost for local dev
     if os.getenv("LOCAL_DEV") == "true":
-        web_server_url = f"http://localhost:8000/user?token={tokens.get('id_token') or tokens.get('access_token')}"
+        web_server_url = f"http://localhost:8000/static/index.html#access_token={tokens.get('access_token') or ''}"
     else:
-        web_server_url = "https://diviz.knovoselov.com/user"
-    
+        web_server_url = f"https://diviz.knovoselov.com/static/index.html#access_token={tokens.get('access_token') or ''}"
+
     response = RedirectResponse(url=web_server_url)
 
     logger.info("Auth tokens:  %s", tokens)
 
-    # Set secure cookies with tokens
-    response.set_cookie(
-        key="access_token",
-        value=tokens.get("access_token"),
-        domain=".diviz.knovoselov.com",  # Replace with your domain
-        secure=True,
-        httponly=True,
-        samesite="lax",
-        max_age=tokens.get("expires_in", 3600)
-    )
-    
-    if tokens.get("id_token"):
-        response.set_cookie(
-            key="id_token", 
-            value=tokens.get("id_token"),
-            domain=".diviz.knovoselov.com",  # Replace with your domain
-            secure=True,
-            httponly=True,
-            samesite="lax",
-            max_age=tokens.get("expires_in", 3600)
-        )
-    
     return response
+
+
 
 
 def main():

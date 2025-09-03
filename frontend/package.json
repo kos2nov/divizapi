@@ -1,0 +1,21 @@
+{
+  "name": "diviz-spa",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "^14.2.32",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.11.30",
+    "@types/react": "18.2.64",
+    "@types/react-dom": "18.2.23",
+    "typescript": "5.4.5"
+  }
+}

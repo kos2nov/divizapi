@@ -33,6 +33,32 @@ mkdir -p lambda_package
 # Copy application code
 cp -r ../diviz lambda_package/
 
+# Include frontend static export if available; build it if possible
+if [ -d "../frontend" ]; then
+  echo " Building frontend (Next.js static export)..."
+  if command -v npm >/dev/null 2>&1; then
+    pushd ../frontend >/dev/null
+    if [ -f package-lock.json ]; then
+      npm ci || npm install
+    else
+      npm install
+    fi
+    npm run build || {
+      echo "⚠️  Frontend build failed; proceeding without static UI";
+    }
+    popd >/dev/null
+  else
+    echo "⚠️  npm not found; skipping frontend build"
+  fi
+  if [ -d "../frontend/out" ]; then
+    mkdir -p lambda_package/frontend
+    cp -R ../frontend/out lambda_package/frontend/
+    echo " Included frontend static export at lambda_package/frontend/out"
+  else
+    echo "⚠️  No frontend/out found; UI will not be served"
+  fi
+fi
+
 # Build dependencies into the package using Docker for Lambda compatibility
 if command -v docker &> /dev/null && docker info &> /dev/null; then
     echo "🐳 Using Docker for Lambda-compatible build..."

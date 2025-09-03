@@ -81,12 +81,12 @@ Example response:
 }
 ```
 
-### GET /review/gmeet/{google_meet}
+### GET /review/meet/{google_meet}
 Returns the provided Google Meet code for demonstration.
 
 Example:
 ```bash
-curl "http://localhost:8000/review/gmeet/abc-defg-hjk"
+curl "http://localhost:8000/review/meet/abc-defg-hjk"
 ```
 Response:
 ```json
