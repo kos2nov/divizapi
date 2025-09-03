@@ -138,6 +138,10 @@ class DivizApiStack(Stack):
         # Handle root path requests without auth
         api.root.add_method("ANY", lambda_integration)
 
+        # Add callback resource for OAuth flow
+        callback_resource = api.root.add_resource("auth").add_resource("callback")
+        callback_resource.add_method("GET", lambda_integration)
+
         # Output the API Gateway URLs
         cdk.CfnOutput(
             self, "ApiGatewayUrl",
@@ -167,12 +171,12 @@ class DivizApiStack(Stack):
         # Output Cognito Auth URLs
         cdk.CfnOutput(
             self, "CognitoLoginUrl",
-            value="https://us-east-2gsndrkdxe.auth.us-east-2.amazoncognito.com/login",
+            value="https://auth.diviz.knovoselov.com/login",
             description="Cognito Hosted UI login URL (add client_id and redirect_uri params)"
         )
 
         cdk.CfnOutput(
             self, "CognitoLogoutUrl",
-            value="https://us-east-2gsndrkdxe.auth.us-east-2.amazoncognito.com/logout",
+            value="https://auth.diviz.knovoselov.com/logout",
             description="Cognito Hosted UI logout URL (add client_id and logout_uri params)"
         )
