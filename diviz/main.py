@@ -1,24 +1,19 @@
-import logging
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
 import base64
-import json
 import logging
 import os
 from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Security
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import jwt
-from pydantic import BaseModel
 
-import os
-from . import user_repository
+from .user_repository import get_or_create_user_from_claims
 from .auth.cognito_auth import CognitoAuth
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 # Create FastAPI app instance
@@ -52,12 +47,20 @@ for d in candidates:
 
 
 
-# Read Cognito config from environment (set these in your deployment environment)
-COGNITO_REGION = os.getenv("COGNITO_REGION", 'us-east-2')
-COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID", "us-east-2_GSNdrKDXE")
-COGNITO_APP_CLIENT_ID = os.getenv("COGNITO_APP_CLIENT_ID", "5tb6pekknkes6eair7o39b3hh7")  # optional
-COGNITO_APP_CLIENT_SECRET = os.getenv("COGNITO_APP_CLIENT_SECRET", "11u11b0rsfm0h23bp3jllta5736h55ahmgvm4u7bgsglvv9r72l7")  # required for token exchange
+# Load environment variables from .env file if it exists
+from dotenv import load_dotenv
+load_dotenv()
+
+# Read Cognito config from environment variables
+COGNITO_REGION = os.getenv("COGNITO_REGION")
+COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID")
+COGNITO_APP_CLIENT_ID = os.getenv("COGNITO_APP_CLIENT_ID")
+COGNITO_APP_CLIENT_SECRET = os.getenv("COGNITO_APP_CLIENT_SECRET")
 ALLOWED_GROUPS = [g.strip() for g in os.getenv("COGNITO_ALLOWED_GROUPS", "").split(",") if g.strip()]
+
+logger.info("COGNITO_USER_POOL_ID = %s", COGNITO_USER_POOL_ID)
+logger.info("COGNITO_APP_CLIENT_ID = %s", COGNITO_APP_CLIENT_ID)
+
 
 cognito_auth = CognitoAuth(
     region=COGNITO_REGION,
@@ -128,11 +131,10 @@ if os.getenv("STAGE") == "prod":
 async def user(
     current_user: Dict[str, Any] = Security(get_current_user),
 ):
-    # Log minimal, non-sensitive user info for debugging
-    uid = current_user.get("sub") or current_user.get("cognito:username") or current_user.get("username")
-    email = current_user.get("email")
-    logger.info("/api/user accessed by uid=%s email=%s", uid, email)
-    return {"current_user": current_user}
+    """Get or create user from Cognito claims."""
+    user = get_or_create_user_from_claims(current_user)
+    logger.info("User accessed: %s", user.email)
+    return user
 
 
 @app.get("/api/meet/{google_meet}")
@@ -185,19 +187,9 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
             # Verify the ID token using cognito_auth
             claims = await cognito_auth.verify_token(id_token)
             
-            # Extract user details
-            user_id = claims.get('sub')
-            email = claims.get('email')
-            username = claims.get('cognito:username') or claims.get('username')
-            
-            if user_id and email:
-                # Save or update user in repository
-                user = user_repository.save_user(
-                    user_id=user_id,
-                    email=email,
-                    username=username
-                )
-                logger.info("User saved to repository: %s (%s)", user_id, email)
+            # Get or create user from claims
+            user = get_or_create_user_from_claims(claims)
+            logger.info("User processed in auth callback: %s", user.email)
             
         except HTTPException as he:
             logger.error("Token verification failed: %s", str(he.detail))
@@ -206,18 +198,9 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
             logger.error("Error processing ID token: %s", str(e), exc_info=True)
 
     # Create redirect response with ID token
-    id_token = tokens.get('id_token')
     if not id_token:
         logger.error("No ID token in response from Cognito")
         raise HTTPException(status_code=400, detail="No ID token received")
-
-    # Verify the ID token before using it
-    try:
-        claims = await cognito_auth.verify_token(id_token)
-        logger.info("ID token verified for user: %s", claims.get('email'))
-    except Exception as e:
-        logger.error("ID token verification failed: %s", str(e))
-        raise HTTPException(status_code=401, detail="Invalid ID token")
 
     # Build redirect URL with ID token
     base_url = "http://localhost:8000/static/index.html" if os.getenv("LOCAL_DEV") == "true" else "https://diviz.knovoselov.com/static/index.html"

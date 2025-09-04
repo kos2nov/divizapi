@@ -66,6 +66,7 @@ if command -v docker &> /dev/null && docker info &> /dev/null; then
 fastapi==0.115.6
 mangum==0.19.0
 pydantic==2.11.7
+python-dotenv==1.1.1
 google-auth==2.40.3
 google-auth-oauthlib==1.2.2
 google-auth-httplib2==0.2.0
@@ -93,6 +94,7 @@ else
         "fastapi==0.115.6" \
         "mangum==0.19.0" \
         "pydantic==2.11.7" \
+        "python-dotenv==1.1.1" \
         "google-auth==2.40.3" \
         "google-auth-oauthlib==1.2.2" \
         "google-auth-httplib2==0.2.0" \

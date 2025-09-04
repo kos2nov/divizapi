@@ -8,6 +8,7 @@ authors = [
 dependencies = [
     "aws-cdk-lib==2.175.0",
     "constructs>=10.0.0,<11.0.0",
+    "python-dotenv>=1.0.0"
 ]
 requires-python = ">=3.11"
 
