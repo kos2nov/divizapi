@@ -55,7 +55,6 @@ coverage.xml
 
 # Environment / secrets
 .env
-.env.*
 .envrc
 .direnv/
 
