@@ -13,16 +13,14 @@ from aws_cdk import (
 )
 from constructs import Construct
 
-from dotenv import load_dotenv
 from pathlib import Path
+from dotenv import dotenv_values
 
 # Load .env from the parent directory (project root)
 dotenv_path = Path(__file__).parent.parent.parent / '.env'
-load_dotenv(dotenv_path=dotenv_path)
+conf = dotenv_values(dotenv_path=dotenv_path)
 
-# Use environment variables
-env_vars = os.environ
-
+print("conf: ", conf)
 
 class DivizApiStack(Stack):
 
@@ -62,21 +60,16 @@ class DivizApiStack(Stack):
             memory_size=512,
             environment={
                 "PYTHONPATH": "/var/task:/opt/python",
-                "STAGE": env_vars.get("STAGE", "prod"),
-                "LOG_LEVEL": env_vars.get("LOG_LEVEL", "INFO"),
-                # Cognito Configuration
-                "COGNITO_REGION": env_vars.get("COGNITO_REGION"),
-                "COGNITO_USER_POOL_ID": env_vars.get("COGNITO_USER_POOL_ID"),
-                "COGNITO_APP_CLIENT_ID": env_vars.get("COGNITO_APP_CLIENT_ID"),
-                "COGNITO_APP_CLIENT_SECRET": env_vars.get("COGNITO_APP_CLIENT_SECRET"),
-                "COGNITO_ALLOWED_GROUPS": env_vars.get("COGNITO_ALLOWED_GROUPS", "")
+                "STAGE": conf.get("STAGE", "prod"),
+                "LOG_LEVEL": conf.get("LOG_LEVEL", "INFO"),
+                **conf
             }
         )
 
         # Reference existing Cognito User Pool
         user_pool = cognito.UserPool.from_user_pool_id(
             self, "DivizUserPool",
-            user_pool_id=env_vars.get("COGNITO_USER_POOL_ID")
+            user_pool_id=conf.get("COGNITO_USER_POOL_ID")
         )
 
         # Create Cognito authorizer

@@ -20,8 +20,6 @@ from .auth.cognito_auth import CognitoAuth
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
-
 # Create FastAPI app instance
 app = FastAPI(
     title="DiViz API",
@@ -55,7 +53,11 @@ for d in candidates:
 
 # Load environment variables from .env file if it exists
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=False)
+
+LOCAL_DEV = os.getenv("LOCAL_DEV") == "true"
+BASE_URL = "http://localhost:8000" if LOCAL_DEV else os.getenv("BASE_URL")
+
 
 # Read Cognito config from environment variables
 COGNITO_REGION = os.getenv("COGNITO_REGION")
@@ -79,7 +81,7 @@ security = HTTPBearer(auto_error=False)
 
 async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Security(security)) -> Dict[str, Any]:
     # Local development mode - bypass auth
-    if os.getenv("LOCAL_DEV") == "true":
+    if LOCAL_DEV:
         return {"sub": "local-user", "email": "dev@example.com", "cognito:username": "localdev"}
 
     if not cognito_auth:
@@ -294,24 +296,28 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
     # Exchange code for tokens with Cognito
     token_endpoint = f"https://auth.diviz.knovoselov.com/oauth2/token"
 
+    # Create Basic auth header with client credentials
+    auth_string = f"{COGNITO_APP_CLIENT_ID}:{COGNITO_APP_CLIENT_SECRET}"
+    auth_bytes = base64.b64encode(auth_string.encode()).decode()
+    callback_url = f"{BASE_URL}/auth/callback"
+    logger.info("Auth Callback URL: %s, code: %s, CLIENT_ID: %s, CLIENT_SECRET: %s", callback_url, code, COGNITO_APP_CLIENT_ID, COGNITO_APP_CLIENT_SECRET)
     async with httpx.AsyncClient() as client:
         token_response = await client.post(
             token_endpoint,
             data={
                 "grant_type": "authorization_code",
                 "code": code,
-                "redirect_uri": f"{BASE_URL}/auth/callback"
+                "redirect_uri": callback_url
             },
             headers={
-                "Content-Type": "application/x-www-form-urlencoded"
-            },
-            #auth=httpx.BasicAuth(username = COGNITO_APP_CLIENT_ID, password = COGNITO_APP_CLIENT_SECRET)
-            auth=httpx.BasicAuth(username = "5tb6pekknkes6eair7o39b3hh7", password = "11u11b0rsfm0h23bp3jllta5736h55ahmgvm4u7bgsglvv9r72l7")
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": f"Basic {auth_bytes}"
+            }
         )
 
         if token_response.status_code != 200:
             logger.error("Token exchange failed: %s status:%s", token_response.text, token_response.status_code)
-            raise HTTPException(status_code=400, detail="Token exchange failed")
+            raise HTTPException(status_code=400, detail=f"Token exchange failed {token_response.text} status:{token_response.status_code}")
 
         tokens = token_response.json()
         logger.info("Token exchange successful: %s", tokens)
@@ -344,12 +350,8 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
         raise HTTPException(status_code=400, detail="No ID token received")
 
     # Build redirect URL with ID token
-    base_url = "http://localhost:8000/static/index.html" if os.getenv("LOCAL_DEV") == "true" else "https://{BASE_URL}/static/index.html"
-    web_server_url = f"{base_url}#id_token={id_token}"
-
-    response = RedirectResponse(url=web_server_url)
-
-    return response
+    redirect_url = f"{BASE_URL}/static/index.html#id_token={id_token}"
+    return RedirectResponse(url=redirect_url)
 
 
 def main():
