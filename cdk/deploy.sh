@@ -75,6 +75,7 @@ openai==1.102.0
 httpx==0.28.1
 python-jose==3.3.0
 uvicorn==0.35.0
+cryptography==44.0.0
 EOF
     docker run --rm \
         -v $(pwd):/workspace \
@@ -102,7 +103,8 @@ else
         "openai==1.102.0" \
         "httpx==0.28.1" \
         "python-jose==3.3.0" \
-        "uvicorn==0.35.0"
+        "uvicorn==0.35.0" \
+        "cryptography==44.0.0"
 fi
 
 # Write the explicit Lambda handler

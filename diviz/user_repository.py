@@ -26,7 +26,10 @@ class UserRepository:
         username: Optional[str] = None,
         name: Optional[str] = None,
         ext_id: Optional[str] = None,
-        ext_type: Optional[str] = None
+        ext_type: Optional[str] = None,
+        refresh_token: Optional[str] = None,
+        expires_in: Optional[int] = None,
+        token_type: Optional[str] = None,
     ) -> User:
         """
         Save or update a user in the repository.
@@ -47,12 +50,19 @@ class UserRepository:
             username=username,  
             name=name,
             ext_id=ext_id,
-            ext_type=ext_type
+            ext_type=ext_type,
+            refresh_token=refresh_token,
+            expires_in=expires_in,
+            token_type=token_type,
         )
         self._users[user_id] = user
         logger.info("Saved user to repository: %s (ID: %s)", email, user_id)
         return user
     
+    def save_user(self, user: User):
+        self._users[user.id] = user
+        logger.info("Saved user to repository: %s (ID: %s)", user.email, user.id)
+
     def delete_user(self, user_id: str) -> bool:
         """Remove a user from the repository. Returns True if user was found and removed."""
         if user_id in self._users:
@@ -93,15 +103,17 @@ def get_or_create_user_from_claims(claims: Dict[str, Any]) -> User:
         if idt:
             ext_id = idt.get('userId')
             ext_type = 'google'
-            
-    return user_repository.save_user(
-        user_id=user_id,
+
+    user = User(
+        id=user_id,
         email=email,
-        username=username,
+        username=username,  
         name=name,
         ext_id=ext_id,
-        ext_type=ext_type
+        ext_type=ext_type,
     )
+
+    return user
 
 # Create a singleton instance of the repository
 user_repository = UserRepository()

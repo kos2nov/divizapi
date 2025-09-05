@@ -10,7 +10,10 @@ dependencies = [
     "httpx>=0.28.1",
     "python-jose[cryptography]>=3.5.0",
     "uvicorn[standard]>=0.24.0",
-    "python-dotenv>=1.0.0"
+    "python-dotenv>=1.0.0",
+    "google-api-python-client>=2.181.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.2.2",
 ]
 requires-python = ">=3.11"
 readme = "README.md"

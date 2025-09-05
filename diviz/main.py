@@ -1,20 +1,26 @@
 import base64
+import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
+from datetime import datetime, UTC, timedelta
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Security
-from fastapi.responses import RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import FastAPI, HTTPException, Request, Security, Depends
+from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2AuthorizationCodeBearer
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from google.auth.transport.requests import Request as GoogleRequest
 
-from .user_repository import get_or_create_user_from_claims
+from .user_repository import get_or_create_user_from_claims, user_repository
 from .auth.cognito_auth import CognitoAuth
 
 # Configure logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 
 # Create FastAPI app instance
 app = FastAPI(
@@ -127,6 +133,146 @@ if os.getenv("STAGE") == "prod":
         return response
 
 
+async def get_google_credentials(
+    current_user: Dict[str, Any] = Security(get_current_user)
+) -> Optional[Credentials]:
+    """Get Google OAuth2 credentials for the user.
+    
+    Args:
+        current_user: Validated user claims from the token
+    
+    Note: This requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to be set in the environment.
+    """
+
+    try:
+        # Get Google OAuth2 credentials
+        client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
+        client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
+        
+        if not client_id or not client_secret:
+            logger.error("Google OAuth2 client ID or secret not configured")
+            raise HTTPException(
+                status_code=500,
+                detail="Server configuration error"
+            )
+
+        user_id = current_user.get("sub")
+        if not user_id:
+            logger.error("User ID not found in token")
+            raise HTTPException(
+                status_code=404,
+                detail="User ID not found in token"
+            )
+
+        user = user_repository.get_user(user_id)
+        if not user:
+            logger.error("User not found: %s", user_id)
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+
+        # Create credentials object with required fields
+        return Credentials(
+            token=id_token,
+            refresh_token=user.refresh_token, 
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=[
+                'https://www.googleapis.com/auth/calendar.readonly',
+                'https://www.googleapis.com/auth/meetings.space.created'
+            ]
+        )
+    except Exception as e:
+        logger.error(f"Error creating Google credentials: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize Google API client"
+        )
+
+@app.get("/api/meet/{meeting_code}")
+async def get_google_meet_info(
+    meeting_code: str,
+    google_creds: Credentials = Depends(get_google_credentials)
+):
+    """Get Google Meet information using the user's OIDC token.
+    
+    Args:
+        meeting_code: The Google Meet meeting code to look up
+        google_creds: Google credentials
+    """
+    try:
+        
+        # Build the Calendar API service with the Google credentials
+        service = build('calendar', 'v3', credentials=google_creds)
+        
+        # Try to get the event by ID first
+        # Uncomment the following block to disable ID-based event lookup
+        # This is useful if the ID is a conference ID rather than a Google event ID
+        #try:
+        #    event = service.events().get(
+        #        calendarId='primary',
+        #        eventId=meeting_id,
+        #    ).execute()
+        #except Exception as e:
+        #    logger.error(f"Error getting event by ID: {str(e)}, type: {type(e)}")
+        #    pass  # Continue with conference ID search
+            # If event not found by ID, try to search by conference ID
+        
+        maxTime = datetime.now(UTC).isoformat() + 'Z'  # 'Z' indicates UTC time
+        minTime = (datetime.now(UTC) - timedelta(days=7)).isoformat() + 'Z'  # 'Z' indicates UTC time
+        events_result = service.events().list(
+            calendarId='primary',
+            q=meeting_code,
+            timeMin=minTime,
+            timeMax=maxTime,
+            maxResults=1,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+        
+        events = events_result.get('items', [])
+        if not events:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        event = events[0]
+        
+        # Extract meeting details
+        conference_data = event.get('conferenceData', {})
+        video_entry = next(
+            (ep for ep in conference_data.get('entryPoints', []) 
+             if ep.get('entryPointType') == 'video'), 
+            {}
+        )
+        
+        attendees = [
+            attendee.get('email', attendee.get('displayName', 'Unknown'))
+            for attendee in event.get('attendees', [])
+            if not attendee.get('self', False)  # Exclude the organizer
+        ]
+        
+        return {
+            'event_id': event.get('id', ''),
+            'title': event.get('summary', 'No title'),
+            'description': event.get('description', ''),
+            'start_time': event.get('start', {}).get('dateTime'),
+            'end_time': event.get('end', {}).get('dateTime'),
+            'meet_link': video_entry.get('uri', ''),
+            'meeting_code': video_entry.get('meetingCode', ''),
+            'attendees': attendees,
+            'organizer': event.get('organizer', {}).get('email', 'Unknown')
+        }
+        
+    except HTTPException as he:
+        logger.error("HTTPException fetching Google Meet info: %s", str(he.detail))
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching Google Meet info: {str(e)}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to fetch meeting information: {str(e)}"
+        )
+
 @app.get("/api/user")
 async def user(
     current_user: Dict[str, Any] = Security(get_current_user),
@@ -135,14 +281,6 @@ async def user(
     user = get_or_create_user_from_claims(current_user)
     logger.info("User accessed: %s", user.email)
     return user
-
-
-@app.get("/api/meet/{google_meet}")
-async def review(
-    google_meet: str,
-    current_user: Dict[str, Any] = Security(get_current_user),
-):
-    return {"meeting_code": google_meet, "current_user": current_user.get("email")}
 
 
 @app.get("/auth/callback")
@@ -156,22 +294,19 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
     # Exchange code for tokens with Cognito
     token_endpoint = f"https://auth.diviz.knovoselov.com/oauth2/token"
 
-    # Create Basic auth header with client credentials
-    auth_string = f"{COGNITO_APP_CLIENT_ID}:{COGNITO_APP_CLIENT_SECRET}"
-    auth_bytes = base64.b64encode(auth_string.encode()).decode()
-    logger.info("Token exchange for code %s", code)
     async with httpx.AsyncClient() as client:
         token_response = await client.post(
             token_endpoint,
             data={
                 "grant_type": "authorization_code",
                 "code": code,
-                "redirect_uri": f"https://diviz.knovoselov.com/auth/callback"
+                "redirect_uri": f"{BASE_URL}/auth/callback"
             },
             headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Authorization": f"Basic {auth_bytes}"
-            }
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            #auth=httpx.BasicAuth(username = COGNITO_APP_CLIENT_ID, password = COGNITO_APP_CLIENT_SECRET)
+            auth=httpx.BasicAuth(username = "5tb6pekknkes6eair7o39b3hh7", password = "11u11b0rsfm0h23bp3jllta5736h55ahmgvm4u7bgsglvv9r72l7")
         )
 
         if token_response.status_code != 200:
@@ -189,6 +324,12 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
             
             # Get or create user from claims
             user = get_or_create_user_from_claims(claims)
+            user.refresh_token = tokens.get('refresh_token')
+            user.expires_in = tokens.get('expires_in')
+            user.token_type = tokens.get('token_type')
+            user_repository.save_user(user)
+
+            logger.info("tokens: %s", tokens)
             logger.info("User processed in auth callback: %s", user.email)
             
         except HTTPException as he:
@@ -203,7 +344,7 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
         raise HTTPException(status_code=400, detail="No ID token received")
 
     # Build redirect URL with ID token
-    base_url = "http://localhost:8000/static/index.html" if os.getenv("LOCAL_DEV") == "true" else "https://diviz.knovoselov.com/static/index.html"
+    base_url = "http://localhost:8000/static/index.html" if os.getenv("LOCAL_DEV") == "true" else "https://{BASE_URL}/static/index.html"
     web_server_url = f"{base_url}#id_token={id_token}"
 
     response = RedirectResponse(url=web_server_url)
