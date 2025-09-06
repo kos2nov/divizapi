@@ -20,7 +20,6 @@ from dotenv import dotenv_values
 dotenv_path = Path(__file__).parent.parent.parent / '.env'
 conf = dotenv_values(dotenv_path=dotenv_path)
 
-print("conf: ", conf)
 
 class DivizApiStack(Stack):
 

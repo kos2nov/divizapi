@@ -8,9 +8,12 @@ class User(BaseModel):
     id: str | None = None # User ID
     ext_id: str | None = None # External ID from IDP provider
     ext_type: str | None = None # External ID type
+    access_token: str | None = None # Access token for IDP provider
+    id_token: str | None = None # ID token for IDP provider
     refresh_token: str | None = None # Refresh token for IDP provider
     expires_in: int | None = None # Expiration time for IDP provider
     token_type: str | None = None # Token type for IDP provider
+
     
 
     def mailto(self):

@@ -16,9 +16,26 @@ from google.auth.transport.requests import Request as GoogleRequest
 from .user_repository import get_or_create_user_from_claims, user_repository
 from .auth.cognito_auth import CognitoAuth
 
-# Configure logging
+# Configure root logger for the entire application
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Remove all existing handlers
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+
+# Create a simple formatter without timestamps
+formatter = logging.Formatter('%(levelname)s: %(message)s')
+
+# Create console handler and set formatter
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+
+# Add handler to root logger
+root_logger.addHandler(console_handler)
+
+# Get logger for this module
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 # Create FastAPI app instance
 app = FastAPI(
@@ -48,8 +65,6 @@ for d in candidates:
             return RedirectResponse(url="/static/index.html")
         
         break
-
-
 
 # Load environment variables from .env file if it exists
 from dotenv import load_dotenv
@@ -176,8 +191,9 @@ async def get_google_credentials(
 
         # Create credentials object with required fields
         return Credentials(
-            token=id_token,
-            refresh_token=user.refresh_token, 
+            token=user.access_token,
+            refresh_token=user.refresh_token,
+            id_token=user.id_token, 
             token_uri="https://oauth2.googleapis.com/token",
             client_id=client_id,
             client_secret=client_secret,
@@ -205,7 +221,8 @@ async def get_google_meet_info(
         google_creds: Google credentials
     """
     try:
-        
+        logger.info("Google credentials: %s", google_creds)
+
         # Build the Calendar API service with the Google credentials
         service = build('calendar', 'v3', credentials=google_creds)
         
@@ -237,6 +254,7 @@ async def get_google_meet_info(
         events = events_result.get('items', [])
         if not events:
             raise HTTPException(status_code=404, detail="Meeting not found")
+
         event = events[0]
         
         # Extract meeting details
@@ -265,11 +283,8 @@ async def get_google_meet_info(
             'organizer': event.get('organizer', {}).get('email', 'Unknown')
         }
         
-    except HTTPException as he:
-        logger.error("HTTPException fetching Google Meet info: %s", str(he.detail))
-        raise
     except Exception as e:
-        logger.error(f"Error fetching Google Meet info: {str(e)}")
+        logger.error("Error fetching Google Meet info: %s", e, exc_info=True)
         raise HTTPException(
             status_code=503,
             detail=f"Failed to fetch meeting information: {str(e)}"
@@ -286,12 +301,10 @@ async def user(
 
 
 @app.get("/auth/callback")
-async def auth_callback(request: Request, code: str = None, state: str = None):
+async def auth_callback(code: str):
     """
-    Handle Cognito OAuth callback and forward cookies to web server domain
+    Handle Cognito OAuth callback and forward id token to SPA
     """
-    if not code:
-        raise HTTPException(status_code=400, detail="Authorization code missing")
 
     # Exchange code for tokens with Cognito
     token_endpoint = f"https://auth.diviz.knovoselov.com/oauth2/token"
@@ -316,38 +329,41 @@ async def auth_callback(request: Request, code: str = None, state: str = None):
         )
 
         if token_response.status_code != 200:
-            logger.error("Token exchange failed: %s status:%s", token_response.text, token_response.status_code)
+            logger.error("Token exchange failed: %s status: %s", token_response.text, token_response.status_code)
             raise HTTPException(status_code=400, detail=f"Token exchange failed {token_response.text} status:{token_response.status_code}")
 
         tokens = token_response.json()
-        logger.info("Token exchange successful: %s", tokens)
-    # Extract user info from ID token
+        logger.info("access_token: %s", tokens.get('access_token'))
+        logger.info("refresh_token: %s", tokens.get('refresh_token'))
+    
+
     id_token = tokens.get('id_token')
-    if id_token:
-        try:
-            # Verify the ID token using cognito_auth
-            claims = await cognito_auth.verify_token(id_token)
-            
-            # Get or create user from claims
-            user = get_or_create_user_from_claims(claims)
-            user.refresh_token = tokens.get('refresh_token')
-            user.expires_in = tokens.get('expires_in')
-            user.token_type = tokens.get('token_type')
-            user_repository.save_user(user)
-
-            logger.info("tokens: %s", tokens)
-            logger.info("User processed in auth callback: %s", user.email)
-            
-        except HTTPException as he:
-            logger.error("Token verification failed: %s", str(he.detail))
-            raise
-        except Exception as e:
-            logger.error("Error processing ID token: %s", str(e), exc_info=True)
-
-    # Create redirect response with ID token
     if not id_token:
         logger.error("No ID token in response from Cognito")
         raise HTTPException(status_code=400, detail="No ID token received")
+
+    try:
+        #TODO refactor verify_token and get_or_create_user_from_claims to create user in one step
+        # Verify the ID token using cognito_auth
+        claims = await cognito_auth.verify_token(id_token)
+        
+        # Get or create user from claims
+        user = get_or_create_user_from_claims(claims)
+        user.access_token = tokens.get('access_token')
+        user.refresh_token = tokens.get('refresh_token')
+        user.id_token = id_token
+        user.expires_in = tokens.get('expires_in')
+        user.token_type = tokens.get('token_type')
+        user_repository.save_user(user)
+
+        logger.info("User processed in auth callback: %s", user.email)
+        
+    except HTTPException as he:
+        logger.error("Token verification failed: %s", str(he.detail))
+        raise
+    except Exception as e:
+        logger.error("Error processing ID token: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to process ID token")
 
     # Build redirect URL with ID token
     redirect_url = f"{BASE_URL}/static/index.html#id_token={id_token}"

@@ -27,6 +27,8 @@ class UserRepository:
         name: Optional[str] = None,
         ext_id: Optional[str] = None,
         ext_type: Optional[str] = None,
+        access_token: Optional[str] = None,
+        id_token: Optional[str] = None,
         refresh_token: Optional[str] = None,
         expires_in: Optional[int] = None,
         token_type: Optional[str] = None,
@@ -40,7 +42,11 @@ class UserRepository:
             username: Optional username (defaults to email prefix if not provided)
             ext_id: Optional external ID from identity provider
             ext_type: Optional type of external ID (e.g., 'google')
-            
+            access_token: Optional access token from identity provider
+            refresh_token: Optional refresh token from identity provider
+            expires_in: Optional expiration time for access token
+            token_type: Optional token type for access token
+        
         Returns:
             The created/updated User object
         """
@@ -51,6 +57,8 @@ class UserRepository:
             name=name,
             ext_id=ext_id,
             ext_type=ext_type,
+            access_token=access_token,
+            id_token=id_token,
             refresh_token=refresh_token,
             expires_in=expires_in,
             token_type=token_type,
