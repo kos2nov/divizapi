@@ -13,8 +13,7 @@ class User(BaseModel):
     refresh_token: str | None = None # Refresh token for IDP provider
     expires_in: int | None = None # Expiration time for IDP provider
     token_type: str | None = None # Token type for IDP provider
-
-    
+    auth_state: str | None = None # OAuth state parameter for CSRF protection
 
     def mailto(self):
         return f"mailto:{self.username} <{self.email}>"
