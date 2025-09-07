@@ -1,51 +1,40 @@
 "use client";
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from './auth-context';
-import console from 'console';
+import Script from 'next/script';
+
+// Public env vars must be provided in the frontend runtime
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID as string | undefined;
+const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_API_KEY as string | undefined;
 
 type UserResp = { current_user?: Record<string, any>; detail?: string };
 
-function MeetForm() {
-  const { token } = useAuth();
+type MeetFormProps = {
+  onSearch: (code: string) => Promise<any>;
+  googleConnected: boolean;
+  signInGoogle: () => void;
+  missingGoogleEnv: boolean;
+};
+
+function MeetForm({ onSearch, googleConnected, signInGoogle, missingGoogleEnv }: MeetFormProps) {
   const [code, setCode] = useState('');
   const [result, setResult] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token) {
-      setErr('Please log in first');
-      return;
-    }
-
     setLoading(true);
     setErr(null);
     setResult(null);
     
     try {
-      const res = await fetch(`/api/meet/${encodeURIComponent(code)}`, {
-        method: 'GET',
-        headers: { 
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (res.status === 401) {
-        // Token might be expired, clear it and redirect to login
-        router.push('/login');
-        return;
+      if (missingGoogleEnv) {
+        throw new Error('Missing Google Client ID or API Key. Please set NEXT_PUBLIC_GOOGLE_CLIENT_ID and NEXT_PUBLIC_GOOGLE_API_KEY.');
       }
-
-      if (!res.ok) {
-        const error = await res.json().catch(() => ({}));
-        throw new Error(error.detail || 'Request failed');
-      }
-
-      const json = await res.json();
+      const json = await onSearch(code);
+      if (!json) throw new Error('No results');
       setResult(json);
     } catch (e: any) {
       setErr(e?.message || 'Request failed');
@@ -58,7 +47,7 @@ function MeetForm() {
 
   return (
     <>
-      <form onSubmit={onSubmit} style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+      <form onSubmit={onSubmit} style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
         <input
           type="text"
           value={code}
@@ -69,13 +58,90 @@ function MeetForm() {
         <button type="submit" disabled={loading || !code} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #1e293b', background: '#1d4ed8', color: '#fff' }}>
           {loading ? 'Loading...' : 'Check'}
         </button>
+        {!googleConnected && (
+          <button
+            type="button"
+            onClick={signInGoogle}
+            style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #1e293b', background: '#4285F4', color: '#fff' }}
+            title="Sign in to Google to look up Meet info"
+          >
+            Connect Google
+          </button>
+        )}
       </form>
       <div style={{ marginTop: 12 }}>
         {err && <p style={{ color: '#fca5a5' }}>{err}</p>}
         {result && (
-          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>
-            {JSON.stringify(result, null, 2)}
-          </pre>
+          (() => {
+            const firstMatch = result?.matches && result.matches.length > 0 ? result.matches[0] : null;
+            const ev = firstMatch?.event;
+            console.log('Found Event', ev);
+            if (!ev) {
+              return (
+                <div style={{ color: '#94a3b8' }}>No matching events found for code "{result?.normalizedCode ?? ''}".</div>
+              );
+            }
+
+            const startISO = ev?.start?.dateTime || ev?.start?.date || null;
+            const endISO = ev?.end?.dateTime || ev?.end?.date || null;
+            const startDate = startISO ? new Date(startISO) : null;
+            const endDate = endISO ? new Date(endISO) : null;
+            const startStr = startDate ? startDate.toLocaleString() : 'N/A';
+            const durationMs = startDate && endDate ? (endDate.getTime() - startDate.getTime()) : null;
+            const durationStr = (() => {
+              if (durationMs == null || isNaN(durationMs)) return 'N/A';
+              const mins = Math.max(0, Math.round(durationMs / 60000));
+              const h = Math.floor(mins / 60);
+              const m = mins % 60;
+              return h > 0 ? `${h}h ${m}m` : `${m}m`;
+            })();
+
+            const organizerEmail = ev?.organizer?.email || 'N/A';
+            const ep = (ev?.conferenceData?.entryPoints || []) as Array<any>;
+            const firstEpUrl = ep.length > 0 ? (ep[0]?.uri || '') : '';
+            const meetUrl = firstEpUrl || ev?.hangoutLink || '';
+
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
+                <div style={{ border: '1px solid #334155', borderRadius: 8, padding: 12, background: '#0b1220' }}>
+                  <h3 style={{ marginTop: 0, marginBottom: 10, fontSize: 18 }}>Meeting Info</h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', rowGap: 6, columnGap: 10 }}>
+                    <div style={{ color: '#94a3b8' }}>ID</div>
+                    <div style={{ wordBreak: 'break-word' }}>{ev?.id || 'N/A'}</div>
+
+                    <div style={{ color: '#94a3b8' }}>Summary</div>
+                    <div>{ev?.summary || 'N/A'}</div>
+
+                    <div style={{ color: '#94a3b8' }}>Start</div>
+                    <div>{startStr}</div>
+
+                    <div style={{ color: '#94a3b8' }}>Duration</div>
+                    <div>{durationStr}</div>
+
+                    <div style={{ color: '#94a3b8' }}>Organizer</div>
+                    <div>{organizerEmail}</div>
+
+                    <div style={{ color: '#94a3b8' }}>URL</div>
+                    <div>
+                      {meetUrl ? (
+                        <a href={meetUrl} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>{meetUrl}</a>
+                      ) : (
+                        'N/A'
+                      )}
+                    </div>
+
+                    <div style={{ color: '#94a3b8' }}>Description</div>
+                    <div style={{ whiteSpace: 'pre-wrap' }}>{ev?.description || '—'}</div>
+                  </div>
+                </div>
+
+                <div style={{ border: '1px solid #334155', borderRadius: 8, padding: 12, background: '#0b1220' }}>
+                  <h3 style={{ marginTop: 0, marginBottom: 10, fontSize: 18 }}>Transcript</h3>
+                  <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>No transcript available yet.</div>
+                </div>
+              </div>
+            );
+          })()
         )}
       </div>
     </>
@@ -153,6 +219,167 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
+  // Google auth/client state (client-side only)
+  const [gapiLoaded, setGapiLoaded] = useState(false);
+  const [gapiInited, setGapiInited] = useState(false);
+  const [gisLoaded, setGisLoaded] = useState(false);
+  const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
+  const tokenClientRef = useRef<any>(null);
+
+  const missingGoogleEnv = !GOOGLE_CLIENT_ID || !GOOGLE_API_KEY;
+
+  // Initialize gapi client after script load
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!gapiLoaded || gapiInited || missingGoogleEnv) return;
+    const gapi = (window as any).gapi;
+    if (!gapi) return;
+    console.log('Initializing gapi client', GOOGLE_CLIENT_ID, GOOGLE_API_KEY);
+    gapi.load('client', async () => {
+      try {
+        await gapi.client.init({
+          apiKey: GOOGLE_API_KEY,
+          discoveryDocs: [
+            // Calendar API discovery doc (used to find events containing Meet links)
+            'https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest',
+          ],
+        });
+        setGapiInited(true);
+      } catch (e) {
+        console.error('Failed to init gapi client', e);
+      }
+    });
+  }, [gapiLoaded, gapiInited, missingGoogleEnv]);
+
+  // Initialize GIS token client after script load
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!gisLoaded || !gapiInited || tokenClientRef.current || missingGoogleEnv) return;
+    const googleObj = (window as any).google;
+    const gapi = (window as any).gapi;
+    if (!googleObj || !gapi) return;
+    tokenClientRef.current = googleObj.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID!,
+      scope: 'https://www.googleapis.com/auth/calendar.readonly',
+      callback: (resp: any) => {
+        if (resp && resp.access_token) {
+          setGoogleAccessToken(resp.access_token);
+          gapi.client.setToken({ access_token: resp.access_token });
+        }
+      },
+      error_callback: (err: any) => {
+        console.error('GIS error:', err);
+      },
+    });
+  }, [gisLoaded, gapiInited, missingGoogleEnv]);
+
+  const signInGoogle = useCallback(() => {
+    if (missingGoogleEnv) return;
+    if (!tokenClientRef.current) return;
+    // First time prompt consent, subsequent times silent if possible
+    tokenClientRef.current.requestAccessToken({ prompt: googleAccessToken ? '' : 'consent' });
+  }, [googleAccessToken, missingGoogleEnv]);
+
+  const ensureGoogleAuth = useCallback(async () => {
+    if (googleAccessToken) return googleAccessToken;
+    await new Promise<void>((resolve) => {
+      const cb = (resp: any) => resolve();
+      const tc = tokenClientRef.current;
+      if (!tc) return resolve();
+      tc.callback = cb;
+      tc.requestAccessToken({ prompt: 'consent' });
+    });
+    return (window as any).gapi?.client?.getToken()?.access_token || null;
+  }, [googleAccessToken]);
+
+  // Lookup Meet info by scanning Calendar events for a matching Meet link/code
+  const searchMeetByCode = useCallback(async (inputCode: string) => {
+    if (missingGoogleEnv) throw new Error('Google env is not configured');
+    const gapi = (window as any).gapi;
+    if (!gapi) throw new Error('Google API client not loaded');
+
+    await ensureGoogleAuth();
+
+    // Normalize input code (strip url, keep abc-defg-hijk)
+    const codeFromInput = (() => {
+      const code = (inputCode || '').trim();
+      const m = code.match(/([a-z]{3}-[a-z]{4}-[a-z]{3})/i) || code.match(/([a-z]{3}-[a-z]{3}-[a-z]{3})/i);
+      return (m ? m[1] : code).toLowerCase();
+    })();
+
+    // List calendars
+    const calListResp = await gapi.client.calendar.calendarList.list({ maxResults: 100 });
+    const calendars: Array<{ id: string; summary: string }> = (calListResp.result.items || []).map((c: any) => ({ id: c.id, summary: c.summary }));
+
+    const now = Date.now();
+    const tdelta = 30 * 24 * 60 * 60 * 1000;
+    const timeMin = new Date(now - tdelta).toISOString();
+    const timeMax = new Date(now + tdelta).toISOString();
+
+    // Search each calendar for events containing the code
+    const searched: any[] = [];
+    for (const cal of calendars) {
+      try {
+        const evResp = await gapi.client.calendar.events.list({
+          calendarId: cal.id,
+          maxResults: 50,
+          singleEvents: true,
+          orderBy: 'startTime',
+          timeMin,
+          timeMax,
+          showDeleted: false,
+          conferenceDataVersion: 1,
+        });
+        const items = evResp.result.items || [];
+        console.log('Found', items.length, 'events in', cal.summary);
+        for (const ev of items) {
+          searched.push({ calendar: cal, event: ev });
+        }
+      } catch (e) {
+        // Ignore calendars we can't read
+        continue;
+      }
+    }
+
+    const extractCode = (uri: string | undefined) => {
+      if (!uri) return null;
+      const m = uri.match(/meet\.google\.com\/(?:lookup\/)?([a-z\-]+)/i);
+      return m ? m[1].toLowerCase() : null;
+    };
+
+    const matches = searched.filter(({ event }) => {
+      const linkCode = extractCode(event.hangoutLink);
+      const ep = event.conferenceData?.entryPoints || [];
+      const epCodes: string[] = ep.map((p: any) => extractCode(p.uri)).filter(Boolean);
+      return (
+        (linkCode && linkCode.includes(codeFromInput)) ||
+        epCodes.some((c) => (c as string).includes(codeFromInput))
+      );
+    });
+
+    return {
+      input: inputCode,
+      normalizedCode: codeFromInput,
+      matches: matches.map(({ calendar, event }) => ({
+        calendar,
+        event: {
+          id: event.id,
+          status: event.status,
+          summary: event.summary,
+          description: event.description,
+          start: event.start,
+          end: event.end,
+          organizer: event.organizer,
+          attendees: event.attendees,
+          hangoutLink: event.hangoutLink,
+          conferenceData: event.conferenceData,
+          htmlLink: event.htmlLink,
+        },
+      })),
+      searchedCalendars: calendars.length,
+    };
+  }, [ensureGoogleAuth, missingGoogleEnv]);
+
   const fetchUser = useCallback(async () => {
     if (!token) {
       setData(null);
@@ -198,7 +425,12 @@ export default function Page() {
   }, [fetchUser]);
 
   return (
-    <main style={{ maxWidth: 960, margin: '40px auto', padding: '0 20px' }}>
+    <>
+      {/* Load Google libraries on client */}
+      <Script src="https://accounts.google.com/gsi/client" strategy="afterInteractive" onLoad={() => setGisLoaded(true)} />
+      <Script src="https://apis.google.com/js/api.js" strategy="afterInteractive" onLoad={() => setGapiLoaded(true)} />
+
+      <main style={{ maxWidth: 960, margin: '40px auto', padding: '0 20px' }}>
       <header style={{ marginBottom: 24, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 28, margin: 0 }}>DiViz</h1>
@@ -221,31 +453,9 @@ export default function Page() {
           ) : (
             <>
               <button
-                onClick={async () => {
-                  try {
-                    console.log("Google connect token: ", token);
-                    const response = await fetch('/api/google/connect', {
-                      headers: { 
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                      },
-                    });
-                    
-                    console.log("Google connect response: ", response);
-                    if (response.ok) {
-                      const data = await response.json();
-                      console.log("Redirecting to Google OAuth: ", data.authorization_url);
-                      window.location.href = data.authorization_url;
-                    } else {
-                      throw new Error('Failed to connect Google');
-                    }
-                  } catch (error) {
-                    console.error('Error connecting Google:', error);
-                    // Handle error as needed
-                  }
-                }}
+                onClick={signInGoogle}
                 style={{ 
-                  background: '#4285F4', 
+                  background: googleAccessToken ? '#16a34a' : '#4285F4', 
                   color: '#fff', 
                   padding: '8px 12px', 
                   borderRadius: 8, 
@@ -256,6 +466,7 @@ export default function Page() {
                   gap: 8,
                   cursor: 'pointer'
                 }}
+                title={googleAccessToken ? 'Google Connected' : 'Connect Google'}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24">
                   <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -263,7 +474,7 @@ export default function Page() {
                   <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
                   <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                 </svg>
-                Google
+                {googleAccessToken ? 'Google Connected' : 'Google'}
               </button>
               <button
                 onClick={() => {
@@ -321,11 +532,32 @@ export default function Page() {
         </div>
         {!data && !error && <p>Loading...</p>}
         {error && <p style={{ color: '#fca5a5' }}>{error}</p>}
-        {data && (
-          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>
-            {JSON.stringify(data, null, 2)}
-          </pre>
-        )}
+        {data && (() => {
+          const u: any = (data as any)?.current_user ?? (data as any) ?? {};
+          const displayName = u?.name || u?.username || 'Unknown user';
+          const email = u?.email || '';
+          const id = u?.id ?? '—';
+          const username = u?.username ?? '—';
+          const extId = u?.ext_id ?? '—';
+          const groups = Array.isArray(u?.groups) ? (u.groups as any[]).join(', ') : (u?.groups || '—');
+
+          return (
+            <div>
+              <div style={{ fontSize: 18, marginBottom: 6 }}>
+                <span>{displayName}</span>
+                {email && (
+                  <span style={{ color: '#94a3b8' }}> {'<'}{email}{'>'}</span>
+                )}
+              </div>
+              <div style={{ color: '#94a3b8', fontSize: '0.9em', lineHeight: 1.6 }}>
+                <div>id: {id}</div>
+                <div>username: {username}</div>
+                <div>ext_id: {extId}</div>
+                <div>groups: {groups}</div>
+              </div>
+            </div>
+          );
+        })()}
         <style jsx global>{`
           @keyframes spin {
             from { transform: rotate(0deg); }
@@ -335,12 +567,23 @@ export default function Page() {
       </section>
       <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16, marginTop: 16 }}>
         <h2 style={{ fontSize: 20, marginTop: 0, marginBottom: 12 }}>Meet</h2>
-        <MeetForm />
+        {missingGoogleEnv && (
+          <p style={{ color: '#fca5a5' }}>
+            Missing Google configuration. Please set NEXT_PUBLIC_GOOGLE_CLIENT_ID and NEXT_PUBLIC_GOOGLE_API_KEY in your environment.
+          </p>
+        )}
+        <MeetForm 
+          onSearch={searchMeetByCode} 
+          googleConnected={!!googleAccessToken} 
+          signInGoogle={signInGoogle}
+          missingGoogleEnv={missingGoogleEnv}
+        />
       </section>
       <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16, marginTop: 16 }}>
         <TokenPanel />
       </section>
     </main>
+    </>
   )
 }
 

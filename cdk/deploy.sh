@@ -59,54 +59,28 @@ if [ -d "../frontend" ]; then
   fi
 fi
 
-# Build dependencies into the package using Docker for Lambda compatibility
+# Build dependencies into the package using Docker with layer caching
 if command -v docker &> /dev/null && docker info &> /dev/null; then
-    echo "🐳 Using Docker for Lambda-compatible build..."
-    cat > requirements.txt << EOF
-fastapi==0.115.6
-mangum==0.19.0
-pydantic==2.11.7
-python-dotenv==1.1.1
-google-auth==2.40.3
-google-auth-oauthlib==1.2.2
-google-auth-httplib2==0.2.0
-google-api-python-client==2.179.0
-openai==1.102.0
-httpx==0.28.1
-python-jose==3.3.0
-uvicorn==0.35.0
-cryptography==44.0.0
-authlib==1.6.3 
-EOF
-    docker run --rm \
-        -v $(pwd):/workspace \
-        -w /workspace \
-        --platform linux/x86_64 \
-        --entrypoint="" \
-        public.ecr.aws/lambda/python:3.11 \
-        /bin/bash -c "
-            pip install --target lambda_package -r requirements.txt --no-cache-dir && \
-            rm requirements.txt && \
-            find lambda_package -name '*.pyc' -delete && \
-            find lambda_package -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
-        "
+    echo "🐳 Building dependency image (cached)..."
+    export DOCKER_BUILDKIT=1
+    IMAGE_NAME="diviz-lambda-deps:py311"
+    DOCKER_PLATFORM="linux/amd64"
+
+    # Build the image using pinned requirements; will be cached if unchanged
+    docker build \
+        --platform ${DOCKER_PLATFORM} \
+        -f ../cdk/Dockerfile.lambda \
+        -t ${IMAGE_NAME} \
+        ..
+
+    echo "📦 Extracting installed dependencies from image..."
+    CID=$(docker create ${IMAGE_NAME})
+    # Copy the contents of /opt/python (site-packages) into the package root
+    docker cp "${CID}:/opt/python/." lambda_package/
+    docker rm "${CID}" >/dev/null
 else
     echo "⚠️  Docker not available, building dependencies locally (may not be Lambda-compatible)"
-    pip install --target lambda_package --no-cache-dir \
-        "fastapi==0.115.6" \
-        "mangum==0.19.0" \
-        "pydantic==2.11.7" \
-        "python-dotenv==1.1.1" \
-        "google-auth==2.40.3" \
-        "google-auth-oauthlib==1.2.2" \
-        "google-auth-httplib2==0.2.0" \
-        "google-api-python-client==2.179.0" \
-        "openai==1.102.0" \
-        "httpx==0.28.1" \
-        "python-jose==3.3.0" \
-        "uvicorn==0.35.0" \
-        "cryptography==44.0.0" \
-        "authlib==1.6.3"
+    pip install --target lambda_package --no-cache-dir -r cdk/requirements.lambda.txt
 fi
 
 # Write the explicit Lambda handler

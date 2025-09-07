@@ -1,3 +1,24 @@
+## Dependency caching (faster deploys)
+
+The deployment pipeline now caches Python dependencies using a small Docker image:
+
+- Dockerfile: `cdk/Dockerfile.lambda`
+- Pinned requirements: `cdk/requirements.lambda.txt`
+
+During `./deploy.sh`, we:
+
+1. Build a Docker image based on `public.ecr.aws/lambda/python:3.11` that installs the pinned requirements into `/opt/python`.
+2. Thanks to Docker layer caching, this step is instant unless `requirements.lambda.txt` changes.
+3. We then extract `/opt/python` from the built image into `lambda_package/` alongside your app code.
+
+If Docker is unavailable, the script falls back to a local `pip install -r cdk/requirements.lambda.txt --target lambda_package` (slower, and may not produce Lambda-compatible wheels on macOS/Windows).
+
+### Updating dependencies
+
+- To add or upgrade a runtime dependency, edit `cdk/requirements.lambda.txt` and run `./deploy.sh`.
+- The cache will be invalidated only if the requirements file changes; otherwise, the last built layer is reused.
+- Keep `pyproject.toml` in sync with `requirements.lambda.txt` as needed.
+
 # DiViz API - AWS CDK Deployment
 
 This directory contains AWS CDK deployment descriptors for the DiViz API service.

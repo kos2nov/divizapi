@@ -1,0 +1,15 @@
+# Runtime dependencies for the Lambda package (pinned for reproducible, cacheable builds)
+fastapi==0.115.6
+mangum==0.19.0
+pydantic==2.11.7
+python-dotenv==1.1.1
+google-auth==2.40.3
+google-auth-oauthlib==1.2.2
+google-auth-httplib2==0.2.0
+google-api-python-client==2.179.0
+openai==1.102.0
+httpx==0.28.1
+python-jose==3.3.0
+uvicorn==0.35.0
+cryptography==44.0.0
+authlib==1.6.3

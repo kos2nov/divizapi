@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1.6
+# Lambda dependencies builder with Docker layer caching
+# This image installs pinned Python dependencies for the Lambda runtime.
+# It uses the AWS Lambda Python 3.11 base to ensure manylinux-compatible wheels.
+
+# Use linux/amd64 for Apple Silicon hosts to match Lambda architecture.
+# You can override the platform via `docker build --platform linux/amd64 ...` in the script.
+FROM public.ecr.aws/lambda/python:3.11 AS deps
+
+# Workdir for building dependencies
+WORKDIR /opt
+
+# Only copy requirements to maximize cache reuse
+COPY cdk/requirements.lambda.txt /opt/requirements.txt
+
+# Install dependencies into /opt/python (conventional site-packages dir for Lambda)
+# Use BuildKit cache for pip download cache to speed up rebuilds
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install -r /opt/requirements.txt -t /opt/python
+
+# The resulting layer with dependencies will be under /opt/python inside the image.
+# The deploy script will `docker create` this image and `docker cp` /opt/python into lambda_package.

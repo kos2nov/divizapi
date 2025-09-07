@@ -1,20 +1,20 @@
 import base64
-import json
 import logging
 import os
 from typing import Any, Dict, Optional, List
 from datetime import datetime, UTC, timedelta
 
 import httpx
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Security, Depends
-from fastapi.responses import RedirectResponse, JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2AuthorizationCodeBearer
+from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request as GoogleRequest
-from authlib.integrations.httpx_client import OAuth2Client
 from .user_repository import get_or_create_user_from_claims, user_repository
 from .auth.cognito_auth import CognitoAuth
+from .google_auth import GoogleAuth
 
 # Configure root logger for the entire application
 root_logger = logging.getLogger()
@@ -96,6 +96,13 @@ cognito_auth = CognitoAuth(
 
 security = HTTPBearer(auto_error=False)
 
+# Initialize GoogleAuth helper
+google_auth = GoogleAuth(
+    base_url=BASE_URL,
+    client_id=GOOGLE_CLIENT_ID,
+    client_secret=GOOGLE_CLIENT_SECRET,
+)
+
 async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Security(security)) -> Dict[str, Any]:
     # Local development mode - bypass auth
     if LOCAL_DEV:
@@ -162,43 +169,8 @@ async def get_google_credentials(
     
     Note: This requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to be set in the environment.
     """
-
     try:
-        # Get Google OAuth2 credentials
-        
-        if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-            logger.error("Google OAuth2 client ID or secret not configured")
-            raise HTTPException(status_code=500, detail="Server configuration error")
-
-        user_id = user_claims.get("sub")
-        if not user_id:
-            logger.error("User ID not found in token")
-            raise HTTPException(status_code=404, detail="User ID not found in token")
-
-        user = user_repository.get_user(user_id)
-        if not user:
-            logger.error("User not found: %s", user_id)
-            raise HTTPException(status_code=404, detail="User not found")
-
-        # refresh if expired
-        if token_expired(user.expires_in):
-            tokens = refresh_google_tokens(user)
-            save_google_tokens(user, tokens)
-
-        # Create credentials object with required fields
-        return Credentials(
-            token=user.access_token,
-            refresh_token=user.refresh_token,
-            id_token=user.id_token, 
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=GOOGLE_CLIENT_ID,
-            client_secret=GOOGLE_CLIENT_SECRET,
-            scopes=[
-                "openid", "email", "profile", "offline_access",
-                'https://www.googleapis.com/auth/calendar.readonly',
-                'https://www.googleapis.com/auth/meetings.space.created'
-            ]
-        )
+        return google_auth.get_credentials(user_claims)
     except Exception as e:
         logger.error(f"Error creating Google credentials: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to initialize Google API client")
@@ -362,114 +334,23 @@ async def auth_callback(code: str):
     return RedirectResponse(url=redirect_url)
 
 
-AUTHORIZATION_BASE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_URL = "https://oauth2.googleapis.com/token"
-REDIRECT_URI = f"{BASE_URL}/static/index.html#google_callback"
-SCOPES = [
-    "openid", "email", "profile",
-    'https://www.googleapis.com/auth/calendar.readonly',
-    'https://www.googleapis.com/auth/meetings.space.created'
-]
-
 @app.get("/api/google/connect")
-def connect_google(user=Depends(get_current_user)):
+def connect_google(user_claims: Dict[str, Any] = Security(get_current_user)):
     """Initiate Google OAuth flow by returning the authorization URL."""
-    google = OAuth2Client(
-        GOOGLE_CLIENT_ID,
-        redirect_uri=REDIRECT_URI,
-    )
-    authorization_url, state = google.create_authorization_url(
-        AUTHORIZATION_BASE_URL,
-        access_type="offline",
-        scope=SCOPES,
-        prompt="consent"
-    )
-    logger.info("Authorization state: %s", state)
-    user.auth_state = state
+    # Ensure a user object exists in the repository
+    user = get_or_create_user_from_claims(user_claims)
     user_repository.save_user(user)
+    authorization_url = google_auth.create_authorization_url(user)
     return {"authorization_url": authorization_url}
 
 
 @app.get("/api/google/callback")
-def google_callback(request: Request, user_claims=Depends(get_current_user)):
+def google_callback(request: Request, user_claims: Dict[str, Any] = Security(get_current_user)):
     """Handle Google OAuth callback and store tokens linked to Cognito user."""
-    google = OAuth2Client(GOOGLE_CLIENT_ID, redirect_uri=REDIRECT_URI)
-    tokens = google.fetch_token(
-        TOKEN_URL,
-        client_secret=GOOGLE_CLIENT_SECRET,
-        authorization_response=str(request.url),
-    )
-
-    # token = { "access_token": "...", "refresh_token": "...", "expires_in": 3599, ... }
-
-    # Store securely in DB with user.sub (Cognito user ID)
-    save_google_tokens(user_claims.get('sub'), tokens)
-
-    return {"message": "Google account linked!"}
+    return google_auth.handle_callback(request, user_claims)
 
 
-def save_google_tokens(user_id: str, tokens: Dict[str, Any]) -> None:
-    """
-    Save Google OAuth tokens for a user in the repository.
-    
-    Args:
-        user_id: The ID of the user to save tokens for
-        tokens: Dictionary containing the OAuth tokens
-            Expected keys: access_token, refresh_token, expires_in, token_type, id_token
-    """
-    user = user_repository.get_user(user_id)
-    if not user:
-        logger.error(f"User not found: {user_id}")
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Update user with new tokens
-    user.access_token = tokens.get('access_token')
-    user.refresh_token = tokens.get('refresh_token')
-    user.id_token = tokens.get('id_token')
-    user.expires_in = tokens.get('expires_in')
-    user.token_type = tokens.get('token_type')
-    
-    # Save the updated user
-    user_repository.save_user(user)
-    logger.info(f"Updated Google tokens for user: {user_id}")
-
-
-
-def refresh_google_token(refresh_token: str) -> Dict[str, str]:
-    """
-    Refresh Google OAuth2 access token using the stored refresh_token.
-    
-    Args:
-        refresh_token (str): Refresh token.
-    
-    Returns:
-        dict: Updated token dict with new 'access_token' and 'expires_in'.
-              Keeps the original 'refresh_token'.
-    """
-    if not refresh_token:
-        raise ValueError("Missing refresh_token — cannot refresh access token.")
-
-    payload = {
-        "client_id": GOOGLE_CLIENT_ID,
-        "client_secret": GOOGLE_CLIENT_SECRET,
-        "refresh_token": refresh_token,
-        "grant_type": "refresh_token",
-    }
-
-    resp = requests.post(TOKEN_URL, data=payload)
-    if resp.status_code != 200:
-        raise RuntimeError(
-            f"Failed to refresh Google token: {resp.status_code} {resp.text}"
-        )
-
-    new_tokens = resp.json()
-    # Example response:
-    # { "access_token": "...", "expires_in": 3599, "scope": "...", "token_type": "Bearer" }
-
-    # Keep the old refresh_token since Google may not return it again
-    new_tokens["refresh_token"] = refresh_token
-
-    return new_tokens
+# Google OAuth helper functions moved to diviz/google_auth.py
 
 
 def main():
