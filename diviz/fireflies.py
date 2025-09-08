@@ -84,8 +84,6 @@ query Transcript($id: String!) {
         payload = {"query": query}
         if variables:
             payload["variables"] = variables
-        
-        logger.info("Fireflies call headers: %s", headers)
 
         async with httpx.AsyncClient() as client:
             resp = await client.post(self.FIREFLIES_ENDPOINT, headers=headers, json=payload, timeout=30)
@@ -143,6 +141,49 @@ query Transcript($id: String!) {
         data = await self._graphql_request(self.TRANSCRIPT_QUERY, variables)
         tr = data.get("transcript")
         return tr
+    
+    async def get_transcript_by_meet_code(self, meet_code: str, days: int = 30) -> Dict[str, Any]:
+        """
+        Get a transcript by Google Meet code with full details in API response format.
+        
+        Args:
+            meet_code: The Google Meet code or URL to search for
+            days: Number of days to search back (default: 30)
+        
+        Returns:
+            Dict containing transcript details in API response format
+        
+        Raises:
+            ValueError: If transcript is not found
+            Exception: For other errors during API calls
+        """
+        transcript_info = await self.find_transcript_by_meet_code(meet_code, days)
+        
+        if not transcript_info:
+            raise ValueError(f"No transcript found for meet code '{meet_code}' in the last {days} days")
+        
+        transcript = await self.get_transcript_detail(transcript_info["id"])
+
+        if not transcript:
+            return {
+                "transcript_id": transcript_info["id"],
+                "title": transcript_info.get("title", ""),
+                "meeting_link": transcript_info.get("meeting_link", ""),
+                "date": transcript_info.get("date", ""),
+                "summary": "Error: transcript details not found",
+            }
+
+        return {
+            "transcript_id": transcript["id"],
+            "title": transcript.get("title", ""),
+            "meeting_link": transcript.get("meeting_link", ""),
+            "date": transcript.get("date", ""),
+            "duration": transcript.get("duration", ""),
+            "speakers": transcript.get("speakers", []),
+            "sentences": transcript.get("sentences", []),
+            "summary": transcript.get("summary", {}),
+            "organizer_email": transcript.get("organizer_email", "")
+        }
 
 
 def as_plain_text(transcript: Dict[str, Any]) -> str:
@@ -179,18 +220,18 @@ def get_by_code(meet_code: str, days: int, fmt: str, show_id: bool) -> None:
     """Find a transcript by Google Meet link or code and print it."""
     click.echo(f"Searching recent transcripts (last {days} days) for meet: {meet_code}", err=True)
     fireflies = Fireflies(api_key=FIREFLIES_API_KEY)
-    t = fireflies.find_transcript_by_meet_code(meet_code, days=days)
-    if not t:
-        raise click.ClickException("No transcript found for that Google Meet link/code in the recent window.")
-
-    tr = fireflies.get_transcript_detail(t["id"])
-
+    try:
+        transcript = asyncio.run(fireflies.get_transcript_by_meet_code(meet_code, days))
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        return
+    
     if fmt.lower() == "json":
-        click.echo(json.dumps(tr, indent=2))
+        click.echo(json.dumps(transcript, indent=2))
     else:
         if show_id:
-            click.echo(f"Transcript ID: {tr['id']}", err=True)
-        click.echo(as_plain_text(tr))
+            click.echo(f"Transcript ID: {transcript['transcript_id']}", err=True)
+        click.echo(as_plain_text(transcript))
 
 
 @cli.command("by-id")

@@ -6,7 +6,8 @@ from datetime import datetime, UTC, timedelta
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Security, Depends
+from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request, Security, Depends, Body
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google.oauth2.credentials import Credentials
@@ -16,6 +17,7 @@ from .user_repository import get_or_create_user_from_claims, user_repository
 from .auth.cognito_auth import CognitoAuth
 from .google_auth import GoogleAuth
 from .fireflies import Fireflies
+from .meeting_analyzer import MeetingAnalyzer
 
 # Configure root logger for the entire application
 root_logger = logging.getLogger()
@@ -272,41 +274,19 @@ async def get_fireflies_transcript(
     
     Args:
         meet_code: The Google Meet code to search for
-        days: Number of days to search back (default: 7)
+        days: Number of days to search back (default: 30)
         user_claims: Authenticated user claims (required for API access)
+        
+    Returns:
+        Dict containing transcript details including ID, title, meeting link, date,
+        duration, speakers, sentences, summary, and organizer email
     """
-
-
     try:
-        # Initialize Fireflies client with API key from environment
         fireflies = Fireflies()
+        return await fireflies.get_transcript_by_meet_code(meet_code, days=days)
         
-        # Find transcript by meet code
-        transcript = await fireflies.find_transcript_by_meet_code(meet_code, days=days)
-        
-        if not transcript:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"No transcript found for meet code '{meet_code}' in the last {days} days"
-            )
-        
-        logger.info("Found transcript: %s", transcript)
-
-        # Get full transcript details
-        transcript_details = await fireflies.get_transcript_detail(transcript["id"])
-        
-        return {
-            "transcript_id": transcript_details["id"],
-            "title": transcript_details.get("title", ""),
-            "meeting_link": transcript_details.get("meeting_link", ""),
-            "date": transcript_details.get("date", ""),
-            "duration": transcript_details.get("duration", ""),
-            "speakers": transcript_details.get("speakers", []),
-            "sentences": transcript_details.get("sentences", []),
-            "summary": transcript_details.get("summary", {}),
-            "organizer_email": transcript_details.get("organizer_email", "")
-        }
-        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -315,6 +295,44 @@ async def get_fireflies_transcript(
             status_code=500, 
             detail=f"Failed to retrieve transcript: {str(e)}"
         )
+
+
+class GoogleMeetInfo(BaseModel):
+    """
+    Analyze a Google Meet transcript using Fireflies.ai
+    """
+    meet_code: str
+    title: str
+    start_time: str
+    end_time: str
+
+
+@app.post("/api/analyze/meet/")
+async def analyze_meet(meet_info: GoogleMeetInfo = Body(), # type: ignore
+    user_claims: Dict[str, Any] = Security(get_current_user)):
+    """
+    Analyze a Google Meet transcript using Fireflies.ai
+    """
+    try:
+        # Initialize Fireflies client with API key from environment
+        fireflies = Fireflies()
+        transcript = await fireflies.get_transcript_by_meet_code(meet_info.meet_code)
+        
+        if not transcript:
+            raise HTTPException(status_code=404, detail=f"No transcript found for meet code '{meet_info.meet_code}'")
+        
+        # Analyze meeting transcript
+        analyzer = MeetingAnalyzer()
+        meeting_stats = analyzer.analyze(transcript)
+        
+        return {
+            "transcript_id": transcript["transcript_id"],
+            "stats": meeting_stats
+        }
+        
+    except Exception as e:
+        logger.error("Error analyzing transcript: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=503, detail=f"Failed to analyze transcript: {str(e)}")
 
 
 @app.get("/auth/callback")
@@ -370,12 +388,9 @@ async def auth_callback(code: str):
 
         logger.info("User processed in auth callback: %s", user.email)
         
-    except HTTPException as he:
-        logger.error("Token verification failed: %s", str(he.detail))
-        raise
     except Exception as e:
         logger.error("Error processing ID token: %s", str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to process ID token")
+        raise HTTPException(status_code=503, detail="Failed to process ID token")
 
     # Build redirect URL with ID token
     redirect_url = f"{BASE_URL}/static/index.html#id_token={id_token}"

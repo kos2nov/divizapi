@@ -12,12 +12,10 @@ type UserResp = { current_user?: Record<string, any>; detail?: string };
 
 type MeetFormProps = {
   onSearch: (code: string) => Promise<any>;
-  googleConnected: boolean;
-  signInGoogle: () => void;
   missingGoogleEnv: boolean;
 };
 
-function MeetForm({ onSearch, googleConnected, signInGoogle, missingGoogleEnv }: MeetFormProps) {
+function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
   const [code, setCode] = useState('');
   const [result, setResult] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -25,6 +23,9 @@ function MeetForm({ onSearch, googleConnected, signInGoogle, missingGoogleEnv }:
   const [transcript, setTranscript] = useState<any>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<any>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   const { token } = useAuth();
 
@@ -70,6 +71,8 @@ function MeetForm({ onSearch, googleConnected, signInGoogle, missingGoogleEnv }:
     setResult(null);
     setTranscript(null);
     setTranscriptError(null);
+    setAnalysis(null);
+    setAnalysisError(null);
     
     try {
       if (missingGoogleEnv) {
@@ -98,6 +101,64 @@ function MeetForm({ onSearch, googleConnected, signInGoogle, missingGoogleEnv }:
     }
   };
 
+  // Whether we have Meet details in the currently loaded result
+  const hasMeetDetails = (() => {
+    const firstMatch = result?.matches && result.matches.length > 0 ? result.matches[0] : null;
+    const ev = firstMatch?.event;
+    if (!ev) return false;
+    const meetUrl = ev?.hangoutLink || (ev?.conferenceData?.entryPoints || []).find((ep: any) => ep.uri)?.uri;
+    return !!meetUrl;
+  })();
+
+  const onAnalyze = async () => {
+    if (analysisLoading) return;
+    if (!token) {
+      setAnalysisError('Authentication required for analysis');
+      return;
+    }
+    const firstMatch = result?.matches && result.matches.length > 0 ? result.matches[0] : null;
+    const ev = firstMatch?.event;
+    if (!ev) {
+      setAnalysisError('No meeting selected to analyze');
+      return;
+    }
+
+    const meetUrl = ev?.hangoutLink || (ev?.conferenceData?.entryPoints || []).find((ep: any) => ep.uri)?.uri;
+    const meetCodeMatch = meetUrl ? meetUrl.match(/meet\.google\.com\/(?:lookup\/)?([a-z\-]+)/i) : null;
+    const meet_code = (meetCodeMatch && meetCodeMatch[1]) || result?.normalizedCode || '';
+    const startISO = ev?.start?.dateTime || ev?.start?.date || '';
+    const endISO = ev?.end?.dateTime || ev?.end?.date || '';
+
+    setAnalysisLoading(true);
+    setAnalysisError(null);
+    setAnalysis(null);
+    try {
+      const resp = await fetch('/api/analyze/meet/', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          meet_code,
+          title: ev?.summary || 'No title',
+          start_time: startISO,
+          end_time: endISO,
+        }),
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || 'Failed to analyze meeting');
+      }
+      const data = await resp.json();
+      setAnalysis(data);
+    } catch (error: any) {
+      setAnalysisError(error?.message || 'Failed to analyze meeting');
+    } finally {
+      setAnalysisLoading(false);
+    }
+  };
+
   
 
   return (
@@ -110,19 +171,22 @@ function MeetForm({ onSearch, googleConnected, signInGoogle, missingGoogleEnv }:
           placeholder="Enter Google Meet code"
           style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #334155', background: '#0b1220', color: '#e2e8f0' }}
         />
-        <button type="submit" disabled={loading || !code} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #1e293b', background: '#1d4ed8', color: '#fff' }}>
-          {loading ? 'Loading...' : 'Check'}
-        </button>
-        {!googleConnected && (
-          <button
-            type="button"
-            onClick={signInGoogle}
-            style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #1e293b', background: '#4285F4', color: '#fff' }}
-            title="Sign in to Google to look up Meet info"
-          >
-            Connect Google
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button type="submit" disabled={loading || !code} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #1e293b', background: '#1d4ed8', color: '#fff' }}>
+            {loading ? 'Loading...' : 'Check'}
           </button>
-        )}
+          {hasMeetDetails && (
+            <button
+              type="button"
+              onClick={onAnalyze}
+              disabled={analysisLoading}
+              style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #1e293b', background: '#059669', color: '#fff', opacity: analysisLoading ? 0.7 : 1, cursor: analysisLoading ? 'not-allowed' : 'pointer' }}
+              title="Analyze this meeting"
+            >
+              {analysisLoading ? 'Analyzing...' : 'Analyze'}
+            </button>
+          )}
+        </div>
       </form>
       <div style={{ marginTop: 12 }}>
         {err && <p style={{ color: '#fca5a5' }}>{err}</p>}
@@ -196,6 +260,19 @@ function MeetForm({ onSearch, googleConnected, signInGoogle, missingGoogleEnv }:
                   {transcriptError && <div style={{ color: '#fca5a5' }}>{transcriptError}</div>}
                   {transcript && (
                     <div style={{ maxHeight: 400, overflow: 'auto' }}>
+                      {transcript.transcript_id && (
+                        <div style={{ marginBottom: 8 }}>
+                          <strong style={{ color: '#94a3b8' }}>Transcript:</strong>{' '}
+                          <a
+                            href={`https://app.fireflies.ai/view/${transcript.transcript_id}?channelSource=all`}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ color: '#60a5fa' }}
+                          >
+                            {transcript.transcript_id}
+                          </a>
+                        </div>
+                      )}
                       {transcript.sentences && transcript.sentences.length > 0 ? (
                         <div style={{ lineHeight: 1.6 }}>
                           {transcript.sentences.map((sentence: any, index: number) => (
@@ -265,6 +342,47 @@ function MeetForm({ onSearch, googleConnected, signInGoogle, missingGoogleEnv }:
                     <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>No transcript available yet.</div>
                   )}
                 </div>
+                {(analysisLoading || analysisError || analysis) && (
+                  <div style={{ border: '1px solid #334155', borderRadius: 8, padding: 12, background: '#0b1220' }}>
+                    <h3 style={{ marginTop: 0, marginBottom: 10, fontSize: 18 }}>Analysis</h3>
+                    {analysisLoading && (
+                      <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>Analyzing meeting...</div>
+                    )}
+                    {analysisError && (
+                      <div style={{ color: '#fca5a5' }}>{analysisError}</div>
+                    )}
+                    {analysis && (
+                      <div>
+                        {analysis.transcript_id && (
+                          <div style={{ marginBottom: 8 }}>
+                            <strong style={{ color: '#94a3b8' }}>Transcript ID:</strong>{' '}
+                            <span style={{ color: '#e2e8f0' }}>{analysis.transcript_id}</span>
+                          </div>
+                        )}
+                        {analysis.stats && (
+                          <div>
+                            <div style={{ marginBottom: 8 }}>
+                              <strong style={{ color: '#94a3b8' }}>Speaking Duration:</strong>{' '}
+                              <span style={{ color: '#e2e8f0' }}>{analysis.stats.total_duration_minutes} min</span>
+                            </div>
+                            {analysis.stats.speaker_minutes && (
+                              <div>
+                                <strong style={{ color: '#94a3b8' }}>Speaker Time:</strong>
+                                <ul style={{ marginTop: 4, paddingLeft: 20 }}>
+                                  {Object.entries(analysis.stats.speaker_minutes).map(([speaker, minutes]: [string, any]) => (
+                                    <li key={speaker} style={{ color: '#e2e8f0' }}>
+                                      {speaker}: {typeof minutes === 'number' ? minutes.toFixed(2) : minutes} min
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })()
@@ -344,6 +462,7 @@ export default function Page() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const [activeTab, setActiveTab] = useState<'user' | 'meet'>('user');
 
   // Google auth/client state (client-side only)
   const [gapiLoaded, setGapiLoaded] = useState(false);
@@ -720,98 +839,154 @@ export default function Page() {
         </div>
       </header>
 
-      <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <h2 style={{ fontSize: 20, margin: 0 }}>User</h2>
-          <button 
-            onClick={fetchUser}
-            disabled={loading}
-            style={{
-              background: 'transparent',
-              border: '1px solid #334155',
-              color: '#e2e8f0',
-              borderRadius: 6,
-              padding: '4px 8px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              opacity: loading ? 0.7 : 1,
-              pointerEvents: loading ? 'none' : 'auto'
-            }}
-            title="Refresh user data"
-          >
-            <svg 
-              width="16" 
-              height="16" 
-              viewBox="0 0 24 24" 
-              fill="none" 
-              stroke="currentColor" 
-              strokeWidth="2" 
-              strokeLinecap="round" 
-              strokeLinejoin="round"
+      {/* Navigation Tabs */}
+      <nav style={{ marginBottom: 24 }}>
+        <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #334155', paddingBottom: 8 }}>
+          <div style={{ display: 'flex', borderBottom: '1px solid #334155', width: '100%' }}>
+            <button
+              onClick={() => setActiveTab('user')}
               style={{
-                animation: loading ? 'spin 1s linear infinite' : 'none',
-                transformOrigin: 'center'
+                background: 'transparent',
+                color: activeTab === 'user' ? '#fff' : '#94a3b8',
+                border: 'none',
+                borderBottom: activeTab === 'user' ? '2px solid #60a5fa' : '2px solid transparent',
+                padding: '12px 24px',
+                marginRight: '4px',
+                cursor: 'pointer',
+                fontSize: 16,
+                fontWeight: activeTab === 'user' ? '600' : '400',
+                transition: 'all 0.2s ease',
+                position: 'relative',
+                bottom: '-1px',
+                borderRadius: '4px 4px 0 0',
+                backgroundColor: activeTab === 'user' ? 'rgba(96, 165, 250, 0.1)' : 'transparent'
               }}
             >
-              <path d="M21.5 2v6h-6M2.5 22v-6h6M22 12.5a10 10 0 0 0-17-7.5M2 12.5a10 10 0 0 0 17 7.5"/>
-            </svg>
-            Refresh
-          </button>
+              User
+            </button>
+            <button
+              onClick={() => setActiveTab('meet')}
+              style={{
+                background: 'transparent',
+                color: activeTab === 'meet' ? '#fff' : '#94a3b8',
+                border: 'none',
+                borderBottom: activeTab === 'meet' ? '2px solid #60a5fa' : '2px solid transparent',
+                padding: '12px 24px',
+                cursor: 'pointer',
+                fontSize: 16,
+                fontWeight: activeTab === 'meet' ? '600' : '400',
+                transition: 'all 0.2s ease',
+                position: 'relative',
+                bottom: '-1px',
+                borderRadius: '4px 4px 0 0',
+                backgroundColor: activeTab === 'meet' ? 'rgba(96, 165, 250, 0.1)' : 'transparent'
+              }}
+            >
+              Meet
+            </button>
+          </div>
         </div>
-        {!data && !error && <p>Loading...</p>}
-        {error && <p style={{ color: '#fca5a5' }}>{error}</p>}
-        {data && (() => {
-          const u: any = (data as any)?.current_user ?? (data as any) ?? {};
-          const displayName = u?.name || u?.username || 'Unknown user';
-          const email = u?.email || '';
-          const id = u?.id ?? '—';
-          const username = u?.username ?? '—';
-          const extId = u?.ext_id ?? '—';
-          const groups = Array.isArray(u?.groups) ? (u.groups as any[]).join(', ') : (u?.groups || '—');
+      </nav>
 
-          return (
-            <div>
-              <div style={{ fontSize: 18, marginBottom: 6 }}>
-                <span>{displayName}</span>
-                {email && (
-                  <span style={{ color: '#94a3b8' }}> {'<'}{email}{'>'}</span>
-                )}
-              </div>
-              <div style={{ color: '#94a3b8', fontSize: '0.9em', lineHeight: 1.6 }}>
-                <div>id: {id}</div>
-                <div>username: {username}</div>
-                <div>ext_id: {extId}</div>
-                <div>groups: {groups}</div>
-              </div>
+      {/* Content Sections */}
+      {activeTab === 'user' && (
+        <>
+          <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <h2 style={{ fontSize: 20, margin: 0 }}>User</h2>
+              <button 
+                onClick={fetchUser}
+                disabled={loading}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid #334155',
+                  color: '#e2e8f0',
+                  borderRadius: 6,
+                  padding: '4px 8px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  opacity: loading ? 0.7 : 1,
+                  pointerEvents: loading ? 'none' : 'auto'
+                }}
+                title="Refresh user data"
+              >
+                <svg 
+                  width="16" 
+                  height="16" 
+                  viewBox="0 0 24 24" 
+                  fill="none" 
+                  stroke="currentColor" 
+                  strokeWidth="2" 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round"
+                  style={{
+                    animation: loading ? 'spin 1s linear infinite' : 'none',
+                    transformOrigin: 'center'
+                  }}
+                >
+                  <path d="M21.5 2v6h-6M2.5 22v-6h6M22 12.5a10 10 0 0 0-17-7.5M2 12.5a10 10 0 0 0 17 7.5"/>
+                </svg>
+                Refresh
+              </button>
             </div>
-          );
-        })()}
-        <style jsx global>{`
-          @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-          }
-        `}</style>
-      </section>
-      <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16, marginTop: 16 }}>
-        <h2 style={{ fontSize: 20, marginTop: 0, marginBottom: 12 }}>Meet</h2>
-        {missingGoogleEnv && (
-          <p style={{ color: '#fca5a5' }}>
-            Missing Google configuration. Please set NEXT_PUBLIC_GOOGLE_CLIENT_ID and NEXT_PUBLIC_GOOGLE_API_KEY in your environment.
-          </p>
-        )}
-        <MeetForm 
-          onSearch={searchMeetByCode} 
-          googleConnected={!!googleAccessToken} 
-          signInGoogle={signInGoogle}
-          missingGoogleEnv={missingGoogleEnv}
-        />
-      </section>
-      <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16, marginTop: 16 }}>
-        <TokenPanel />
-      </section>
+            {!data && !error && <p>Loading...</p>}
+            {error && <p style={{ color: '#fca5a5' }}>{error}</p>}
+            {data && (() => {
+              const u: any = (data as any)?.current_user ?? (data as any) ?? {};
+              const displayName = u?.name || u?.username || 'Unknown user';
+              const email = u?.email || '';
+              const id = u?.id ?? '—';
+              const username = u?.username ?? '—';
+              const extId = u?.ext_id ?? '—';
+              const groups = Array.isArray(u?.groups) ? (u.groups as any[]).join(', ') : (u?.groups || '—');
+
+              return (
+                <div>
+                  <div style={{ fontSize: 18, marginBottom: 6 }}>
+                    <span>{displayName}</span>
+                    {email && (
+                      <span style={{ color: '#94a3b8' }}> {'<'}{email}{'>'}</span>
+                    )}
+                  </div>
+                  <div style={{ color: '#94a3b8', fontSize: '0.9em', lineHeight: 1.6 }}>
+                    <div>id: {id}</div>
+                    <div>username: {username}</div>
+                    <div>ext_id: {extId}</div>
+                    <div>groups: {groups}</div>
+                  </div>
+                </div>
+              );
+            })()}
+          </section>
+          <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16, marginTop: 16 }}>
+            <TokenPanel />
+          </section>
+        </>
+      )}
+
+      {activeTab === 'meet' && (
+        <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16 }}>
+          <h2 style={{ fontSize: 20, marginTop: 0, marginBottom: 12 }}>Meet</h2>
+          {missingGoogleEnv && (
+            <p style={{ color: '#fca5a5' }}>
+              Missing Google configuration. Please set NEXT_PUBLIC_GOOGLE_CLIENT_ID and NEXT_PUBLIC_GOOGLE_API_KEY in your environment.
+            </p>
+          )}
+          <MeetForm 
+            onSearch={searchMeetByCode} 
+            missingGoogleEnv={missingGoogleEnv}
+          />
+        </section>
+      )}
+
+      <style jsx global>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </main>
     </>
   )
