@@ -226,6 +226,10 @@ export default function Page() {
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
   const tokenClientRef = useRef<any>(null);
 
+  // Persisted token storage keys
+  const GOOGLE_TOKEN_KEY = 'google_access_token';
+  const GOOGLE_TOKEN_EXPIRES_AT_KEY = 'google_access_token_expires_at';
+
   const missingGoogleEnv = !GOOGLE_CLIENT_ID || !GOOGLE_API_KEY;
 
   // Initialize gapi client after script load
@@ -265,6 +269,15 @@ export default function Page() {
         if (resp && resp.access_token) {
           setGoogleAccessToken(resp.access_token);
           gapi.client.setToken({ access_token: resp.access_token });
+          // Persist token with a small buffer before expiry
+          try {
+            const expiresIn = Number(resp?.expires_in) || 3600; // seconds
+            const expiresAt = Date.now() + Math.max(0, expiresIn - 60) * 1000; // buffer 60s
+            sessionStorage.setItem(GOOGLE_TOKEN_KEY, resp.access_token);
+            sessionStorage.setItem(GOOGLE_TOKEN_EXPIRES_AT_KEY, String(expiresAt));
+          } catch (e) {
+            console.error('Failed to persist Google token', e);
+          }
         }
       },
       error_callback: (err: any) => {
@@ -276,21 +289,108 @@ export default function Page() {
   const signInGoogle = useCallback(() => {
     if (missingGoogleEnv) return;
     if (!tokenClientRef.current) return;
-    // First time prompt consent, subsequent times silent if possible
-    tokenClientRef.current.requestAccessToken({ prompt: googleAccessToken ? '' : 'consent' });
+    // Prefer silent if we appear to have prior consent/token
+    const gapi = (typeof window !== 'undefined') ? (window as any).gapi : null;
+    let storedToken: string | null = null;
+    try { storedToken = sessionStorage.getItem(GOOGLE_TOKEN_KEY); } catch {}
+    const hasToken = !!(googleAccessToken || gapi?.client?.getToken()?.access_token || storedToken);
+    tokenClientRef.current.requestAccessToken({ prompt: hasToken ? '' : 'consent' });
   }, [googleAccessToken, missingGoogleEnv]);
 
   const ensureGoogleAuth = useCallback(async () => {
-    if (googleAccessToken) return googleAccessToken;
+    const gapi = (window as any).gapi;
+    // If we already have an access token in gapi or state, reuse it
+    const existing = gapi?.client?.getToken()?.access_token || googleAccessToken;
+    if (existing) return existing as string;
+
+    // Try to hydrate from sessionStorage if not expired
+    try {
+      const stored = sessionStorage.getItem(GOOGLE_TOKEN_KEY);
+      const exp = parseInt(sessionStorage.getItem(GOOGLE_TOKEN_EXPIRES_AT_KEY) || '0', 10);
+      if (stored && exp && exp > Date.now()) {
+        setGoogleAccessToken(stored);
+        gapi?.client?.setToken?.({ access_token: stored });
+        return stored;
+      }
+    } catch (e) {
+      console.error('Failed to read persisted Google token', e);
+    }
+
+    // Otherwise, request one. Try silent first, then fall back to consent.
     await new Promise<void>((resolve) => {
-      const cb = (resp: any) => resolve();
       const tc = tokenClientRef.current;
       if (!tc) return resolve();
-      tc.callback = cb;
-      tc.requestAccessToken({ prompt: 'consent' });
+
+      let resolved = false;
+      const persist = (accessToken: string, expiresIn?: number) => {
+        try {
+          const expiresInSec = Number(expiresIn) || 3600;
+          const expiresAt = Date.now() + Math.max(0, expiresInSec - 60) * 1000;
+          sessionStorage.setItem(GOOGLE_TOKEN_KEY, accessToken);
+          sessionStorage.setItem(GOOGLE_TOKEN_EXPIRES_AT_KEY, String(expiresAt));
+        } catch {}
+      };
+
+      const doRequest = (promptVal: '' | 'consent', prev: any) => {
+        const prevCb = tc.callback;
+        tc.callback = (resp: any) => {
+          try {
+            if (resp && resp.access_token) {
+              setGoogleAccessToken(resp.access_token);
+              gapi?.client?.setToken?.({ access_token: resp.access_token });
+              persist(resp.access_token, resp?.expires_in);
+            }
+          } finally {
+            tc.callback = prevCb;
+            if (!resolved) {
+              resolved = true;
+              resolve();
+            }
+          }
+        };
+        try {
+          tc.requestAccessToken({ prompt: promptVal });
+        } catch {
+          // If request throws synchronously, fall back immediately if possible
+          if (promptVal === '' && !resolved) {
+            doRequest('consent', prevCb);
+          } else if (!resolved) {
+            resolved = true;
+            resolve();
+          }
+        }
+      };
+
+      // Start with silent attempt
+      doRequest('', null);
+
+      // Fallback to consent after a short grace period if not resolved
+      setTimeout(() => {
+        if (!resolved) {
+          doRequest('consent', null);
+        }
+      }, 800);
     });
-    return (window as any).gapi?.client?.getToken()?.access_token || null;
+
+    return (
+      (window as any).gapi?.client?.getToken()?.access_token || googleAccessToken || null
+    );
   }, [googleAccessToken]);
+
+  // Hydrate token from session storage on load (after gapi init)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !gapiInited) return;
+    try {
+      const token = sessionStorage.getItem(GOOGLE_TOKEN_KEY);
+      const exp = parseInt(sessionStorage.getItem(GOOGLE_TOKEN_EXPIRES_AT_KEY) || '0', 10);
+      if (token && exp && exp > Date.now()) {
+        setGoogleAccessToken(token);
+        (window as any).gapi?.client?.setToken?.({ access_token: token });
+      }
+    } catch (e) {
+      console.error('Failed to hydrate Google token from storage', e);
+    }
+  }, [gapiInited]);
 
   // Lookup Meet info by scanning Calendar events for a matching Meet link/code
   const searchMeetByCode = useCallback(async (inputCode: string) => {
@@ -479,6 +579,10 @@ export default function Page() {
               <button
                 onClick={() => {
                   logout();
+                  try {
+                    sessionStorage.removeItem('google_access_token');
+                    sessionStorage.removeItem('google_access_token_expires_at');
+                  } catch {}
                   window.location.href = 'https://auth.diviz.knovoselov.com/logout?client_id=5tb6pekknkes6eair7o39b3hh7&logout_uri=https%3A%2F%2Fdiviz.knovoselov.com%2Fstatic%2Findex.html';
                 }}
                 style={{ background: 'transparent', color: '#e2e8f0', padding: '8px 12px', borderRadius: 8, textDecoration: 'none', border: '1px solid #334155' }}

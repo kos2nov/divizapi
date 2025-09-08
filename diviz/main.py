@@ -15,6 +15,7 @@ from google.auth.transport.requests import Request as GoogleRequest
 from .user_repository import get_or_create_user_from_claims, user_repository
 from .auth.cognito_auth import CognitoAuth
 from .google_auth import GoogleAuth
+from .fireflies import Fireflies
 
 # Configure root logger for the entire application
 root_logger = logging.getLogger()
@@ -26,14 +27,11 @@ for handler in root_logger.handlers[:]:
 
 # Create a simple formatter without timestamps
 formatter = logging.Formatter('%(levelname)s: %(message)s')
-
 # Create console handler and set formatter
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(formatter)
 
-# Add handler to root logger
 root_logger.addHandler(console_handler)
-
 # Get logger for this module
 logger = logging.getLogger(__name__)
 
@@ -264,6 +262,61 @@ async def user(
     return user
 
 
+@app.get("/api/fireflies/{meet_code}")
+async def get_fireflies_transcript(
+    meet_code: str,
+    days: int = 7,
+    user_claims: Dict[str, Any] = Security(get_current_user),
+):
+    """Retrieve meeting transcript from Fireflies.ai by meet code.
+    
+    Args:
+        meet_code: The Google Meet code to search for
+        days: Number of days to search back (default: 7)
+        user_claims: Authenticated user claims (required for API access)
+    """
+
+
+    try:
+        # Initialize Fireflies client with API key from environment
+        fireflies = Fireflies()
+        
+        # Find transcript by meet code
+        transcript = await fireflies.find_transcript_by_meet_code(meet_code, days=days)
+        
+        if not transcript:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No transcript found for meet code '{meet_code}' in the last {days} days"
+            )
+        
+        logger.info("Found transcript: %s", transcript)
+
+        # Get full transcript details
+        transcript_details = await fireflies.get_transcript_detail(transcript["id"])
+        
+        return {
+            "transcript_id": transcript_details["id"],
+            "title": transcript_details.get("title", ""),
+            "meeting_link": transcript_details.get("meeting_link", ""),
+            "date": transcript_details.get("date", ""),
+            "duration": transcript_details.get("duration", ""),
+            "speakers": transcript_details.get("speakers", []),
+            "sentences": transcript_details.get("sentences", []),
+            "summary": transcript_details.get("summary", {}),
+            "organizer_email": transcript_details.get("organizer_email", "")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error retrieving Fireflies transcript: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to retrieve transcript: {str(e)}"
+        )
+
+
 @app.get("/auth/callback")
 async def auth_callback(code: str):
     """
@@ -313,11 +366,6 @@ async def auth_callback(code: str):
         
         # Get or create user from claims
         user = get_or_create_user_from_claims(claims)
-        user.access_token = tokens.get('access_token')
-        user.refresh_token = tokens.get('refresh_token')
-        user.id_token = id_token
-        user.expires_in = tokens.get('expires_in')
-        user.token_type = tokens.get('token_type')
         user_repository.save_user(user)
 
         logger.info("User processed in auth callback: %s", user.email)
@@ -332,6 +380,7 @@ async def auth_callback(code: str):
     # Build redirect URL with ID token
     redirect_url = f"{BASE_URL}/static/index.html#id_token={id_token}"
     return RedirectResponse(url=redirect_url)
+
 
 
 @app.get("/api/google/connect")
