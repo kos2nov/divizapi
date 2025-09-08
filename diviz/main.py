@@ -265,7 +265,7 @@ async def user(
 @app.get("/api/fireflies/{meet_code}")
 async def get_fireflies_transcript(
     meet_code: str,
-    days: int = 7,
+    days: int = 30,
     user_claims: Dict[str, Any] = Security(get_current_user),
 ):
     """Retrieve meeting transcript from Fireflies.ai by meet code.

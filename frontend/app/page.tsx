@@ -22,12 +22,54 @@ function MeetForm({ onSearch, googleConnected, signInGoogle, missingGoogleEnv }:
   const [result, setResult] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [transcript, setTranscript] = useState<any>(null);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
+
+  const { token } = useAuth();
+
+  const fetchTranscript = async (meetCode: string) => {
+    if (!token) {
+      setTranscriptError('Authentication required for transcript');
+      return;
+    }
+    
+    setTranscriptLoading(true);
+    setTranscriptError(null);
+    
+    try {
+      const response = await fetch(`/api/fireflies/${meetCode}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (response.status === 404) {
+        setTranscriptError('No transcript found for this meeting');
+        return;
+      }
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch transcript');
+      }
+      
+      const transcriptData = await response.json();
+      setTranscript(transcriptData);
+    } catch (error: any) {
+      setTranscriptError(error.message || 'Failed to load transcript');
+    } finally {
+      setTranscriptLoading(false);
+    }
+  };
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErr(null);
     setResult(null);
+    setTranscript(null);
+    setTranscriptError(null);
     
     try {
       if (missingGoogleEnv) {
@@ -36,6 +78,19 @@ function MeetForm({ onSearch, googleConnected, signInGoogle, missingGoogleEnv }:
       const json = await onSearch(code);
       if (!json) throw new Error('No results');
       setResult(json);
+      
+      // Extract meet code from the result and fetch transcript
+      const firstMatch = json?.matches && json.matches.length > 0 ? json.matches[0] : null;
+      const ev = firstMatch?.event;
+      if (ev) {
+        const meetUrl = ev?.hangoutLink || (ev?.conferenceData?.entryPoints || []).find((ep: any) => ep.uri)?.uri;
+        if (meetUrl) {
+          const meetCodeMatch = meetUrl.match(/meet\.google\.com\/(?:lookup\/)?([a-z\-]+)/i);
+          if (meetCodeMatch) {
+            await fetchTranscript(meetCodeMatch[1]);
+          }
+        }
+      }
     } catch (e: any) {
       setErr(e?.message || 'Request failed');
     } finally {
@@ -137,7 +192,78 @@ function MeetForm({ onSearch, googleConnected, signInGoogle, missingGoogleEnv }:
 
                 <div style={{ border: '1px solid #334155', borderRadius: 8, padding: 12, background: '#0b1220' }}>
                   <h3 style={{ marginTop: 0, marginBottom: 10, fontSize: 18 }}>Transcript</h3>
-                  <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>No transcript available yet.</div>
+                  {transcriptLoading && <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>Loading transcript...</div>}
+                  {transcriptError && <div style={{ color: '#fca5a5' }}>{transcriptError}</div>}
+                  {transcript && (
+                    <div style={{ maxHeight: 400, overflow: 'auto' }}>
+                      {transcript.sentences && transcript.sentences.length > 0 ? (
+                        <div style={{ lineHeight: 1.6 }}>
+                          {transcript.sentences.map((sentence: any, index: number) => (
+                            <div key={index} style={{ marginBottom: 8 }}>
+                              <span style={{ color: '#60a5fa', fontWeight: 'bold' }}>
+                                {sentence.speaker_name || 'Unknown'}:
+                              </span>
+                              <span style={{ marginLeft: 8 }}>
+                                {sentence.text || sentence.raw_text}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>No transcript sentences available.</div>
+                      )}
+                      {transcript.summary && (
+                        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #334155' }}>
+                          <h4 style={{ marginTop: 0, marginBottom: 8, color: '#e2e8f0' }}>Summary</h4>
+                          {transcript.summary.overview && (
+                            <div style={{ marginBottom: 8 }}>
+                              <strong style={{ color: '#94a3b8' }}>Overview:</strong> {transcript.summary.overview}
+                            </div>
+                          )}
+                          {transcript.summary.short_summary && (
+                            <div style={{ marginBottom: 8 }}>
+                              <strong style={{ color: '#94a3b8' }}>Short Summary:</strong> {transcript.summary.short_summary}
+                            </div>
+                          )}
+                          {transcript.summary.bullet_gist && Array.isArray(transcript.summary.bullet_gist) && transcript.summary.bullet_gist.length > 0 && (
+                            <div style={{ marginBottom: 8 }}>
+                              <strong style={{ color: '#94a3b8' }}>Key Points:</strong>
+                              <ul style={{ marginTop: 4, paddingLeft: 20 }}>
+                                {transcript.summary.bullet_gist.map((point: string, index: number) => (
+                                  <li key={index} style={{ color: '#e2e8f0' }}>{point}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          {transcript.summary.bullet_gist && !Array.isArray(transcript.summary.bullet_gist) && (
+                            <div style={{ marginBottom: 8 }}>
+                              <strong style={{ color: '#94a3b8' }}>Key Points:</strong>
+                              <div style={{ marginTop: 4, color: '#e2e8f0' }}>{transcript.summary.bullet_gist}</div>
+                            </div>
+                          )}
+                          {transcript.summary.action_items && Array.isArray(transcript.summary.action_items) && transcript.summary.action_items.length > 0 && (
+                            <div style={{ marginBottom: 8 }}>
+                              <strong style={{ color: '#94a3b8' }}>Action Items:</strong>
+                              <ul style={{ marginTop: 4, paddingLeft: 20 }}>
+                                {transcript.summary.action_items.map((item: string, index: number) => (
+                                  <li key={index} style={{ color: '#e2e8f0' }}>{item}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          {transcript.summary.action_items && !Array.isArray(transcript.summary.action_items) && (
+                            <div style={{ marginBottom: 8 }}>
+                              <strong style={{ color: '#94a3b8' }}>Action Items:</strong>
+                              <div style={{ marginTop: 4, color: '#e2e8f0' }}>{transcript.summary.action_items}</div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {!transcript && !transcriptLoading && !transcriptError && (
+                    <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>No transcript available yet.</div>
+                  )}
                 </div>
               </div>
             );
@@ -414,7 +540,7 @@ export default function Page() {
     const now = Date.now();
     const tdelta = 30 * 24 * 60 * 60 * 1000;
     const timeMin = new Date(now - tdelta).toISOString();
-    const timeMax = new Date(now + tdelta).toISOString();
+    const timeMax = new Date(now).toISOString();
 
     // Search each calendar for events containing the code
     const searched: any[] = [];
