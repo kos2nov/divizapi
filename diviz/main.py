@@ -114,7 +114,7 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
 
     # Get token from Authorization header
     if not credentials or not credentials.credentials:
-        raise HTTPException(status_code=401, detail="No authorization token provided")
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     
     token = credentials.credentials
     
@@ -173,7 +173,8 @@ async def get_google_credentials(
         return google_auth.get_credentials(user_claims)
     except Exception as e:
         logger.error(f"Error creating Google credentials: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to initialize Google API client")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.get("/api/meet/{meeting_code}")
@@ -254,6 +255,7 @@ async def get_google_meet_info(
         logger.error("Error fetching Google Meet info: %s", e, exc_info=True)
         raise HTTPException(status_code=503, detail=f"Failed to fetch meeting information: {str(e)}")
 
+
 @app.get("/api/user")
 async def user(
     current_user: Dict[str, Any] = Security(get_current_user),
@@ -297,12 +299,17 @@ async def get_fireflies_transcript(
         )
 
 
+class TranscriptAnalysisRequest(BaseModel):
+    """Request model for analyzing a meeting transcript directly"""
+    agenda: Dict[str, str]  # Should contain 'title' and 'description'
+    transcript: Dict[str, Any]  # Raw transcript data
+
+
 class GoogleMeetInfo(BaseModel):
-    """
-    Analyze a Google Meet transcript using Fireflies.ai
-    """
+    """Analyze a Google Meet transcript using Fireflies.ai"""
     meet_code: str
     title: str
+    description: str
     start_time: str
     end_time: str
 
@@ -323,16 +330,53 @@ async def analyze_meet(meet_info: GoogleMeetInfo = Body(), # type: ignore
         
         # Analyze meeting transcript
         analyzer = MeetingAnalyzer()
-        meeting_stats = analyzer.analyze(transcript)
+
+        agenda = {
+            "title": meet_info.title, 
+            "description": meet_info.description
+            }
+
+
+        analysis = analyzer.analyze(agenda, transcript)
         
         return {
             "transcript_id": transcript["transcript_id"],
-            "stats": meeting_stats
+            "stats": analysis.get("stats"),
+            "feedback": analysis.get("feedback"),
         }
         
     except Exception as e:
         logger.error("Error analyzing transcript: %s", str(e), exc_info=True)
         raise HTTPException(status_code=503, detail=f"Failed to analyze transcript: {str(e)}")
+
+
+@app.post("/api/analyze/transcript/")
+async def analyze_transcript(
+    request: TranscriptAnalysisRequest = Body(..., description="Agenda and transcript data"),
+    user_claims: Dict[str, Any] = Security(get_current_user)
+):
+    """
+    Analyze a meeting transcript directly with provided agenda and transcript data.
+    
+    Request body should contain:
+    - agenda: Dict with 'title' and 'description' of the meeting
+    - transcript: Raw transcript data in Fireflies.ai format
+    
+    Returns analysis including stats and feedback on the meeting.
+    """
+    try:
+        # Analyze meeting transcript
+        analyzer = MeetingAnalyzer()
+        analysis = analyzer.analyze(request.agenda, request.transcript)
+        
+        return {
+            "stats": analysis.get("stats"),
+            "feedback": analysis.get("feedback"),
+        }
+        
+    except Exception as e:
+        logger.error(f"Error analyzing transcript: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/auth/callback")

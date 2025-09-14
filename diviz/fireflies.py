@@ -8,6 +8,7 @@ Docs used: https://docs.fireflies.ai/llms-full.txt
 import os
 import re
 import json
+import asyncio
 import click
 import datetime as dt
 from typing import Any, Dict, List, Optional
@@ -142,6 +143,62 @@ query Transcript($id: String!) {
         tr = data.get("transcript")
         return tr
     
+    def _merge_consecutive_sentences(self, sentences: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Merge consecutive sentences with the same speaker.
+        
+        - Concatenate text fragments with a single space.
+        - Start time is the first segment's start_time.
+        - End time is the last segment's end_time.
+        - Index is reassigned sequentially.
+        """
+        if not sentences:
+            return []
+
+        merged: List[Dict[str, Any]] = []
+        current: Optional[Dict[str, Any]] = None
+
+        for s in sentences or []:
+            speaker = s.get("speaker_name")
+            text_part = (s.get("text") or s.get("raw_text") or "").strip()
+            raw_part = (s.get("raw_text") or s.get("text") or "").strip()
+
+            if current and current.get("speaker_name") == speaker:
+                if text_part:
+                    current.setdefault("_text_parts", []).append(text_part)
+                if raw_part:
+                    current.setdefault("_raw_parts", []).append(raw_part)
+                # Update end_time to the latest of the group
+                current["end_time"] = s.get("end_time", current.get("end_time"))
+            else:
+                # finalize previous
+                if current:
+                    merged.append(current)
+                # start new
+                current = {
+                    "speaker_name": speaker,
+                    "_text_parts": [text_part] if text_part else [],
+                    "_raw_parts": [raw_part] if raw_part else [],
+                    "start_time": s.get("start_time"),
+                    "end_time": s.get("end_time"),
+                }
+
+        if current:
+            merged.append(current)
+
+        # finalize shape and re-index
+        finalized: List[Dict[str, Any]] = []
+        for idx, m in enumerate(merged):
+            finalized.append({
+                "index": idx,
+                "speaker_name": m.get("speaker_name"),
+                "text": " ".join(m.get("_text_parts", [])).strip(),
+                "raw_text": " ".join(m.get("_raw_parts", [])).strip(),
+                "start_time": m.get("start_time"),
+                "end_time": m.get("end_time"),
+            })
+
+        return finalized
+    
     async def get_transcript_by_meet_code(self, meet_code: str, days: int = 30) -> Dict[str, Any]:
         """
         Get a transcript by Google Meet code with full details in API response format.
@@ -173,6 +230,8 @@ query Transcript($id: String!) {
                 "summary": "Error: transcript details not found",
             }
 
+        merged_sentences = self._merge_consecutive_sentences(transcript.get("sentences", []))
+
         return {
             "transcript_id": transcript["id"],
             "title": transcript.get("title", ""),
@@ -180,7 +239,7 @@ query Transcript($id: String!) {
             "date": transcript.get("date", ""),
             "duration": transcript.get("duration", ""),
             "speakers": transcript.get("speakers", []),
-            "sentences": transcript.get("sentences", []),
+            "sentences": merged_sentences,
             "summary": transcript.get("summary", {}),
             "organizer_email": transcript.get("organizer_email", "")
         }

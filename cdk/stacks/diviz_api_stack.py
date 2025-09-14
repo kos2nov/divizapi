@@ -55,7 +55,7 @@ class DivizApiStack(Stack):
             code=lambda_.Code.from_asset("lambda_package"),
             role=lambda_role,
 
-            timeout=Duration.seconds(30),
+            timeout=Duration.seconds(180),  # 3 minutes timeout for longer processing
             memory_size=512,
             environment={
                 "PYTHONPATH": "/var/task:/opt/python",
@@ -129,10 +129,11 @@ class DivizApiStack(Stack):
             )
         )
 
-        # Create Lambda integration
+        # Create Lambda integration with 180-second timeout
         lambda_integration = apigateway.LambdaIntegration(
             diviz_lambda,
-            request_templates={"application/json": '{ "statusCode": "200" }'}
+            request_templates={"application/json": '{ "statusCode": "200" }'},
+            timeout=Duration.seconds(29)
         )
 
         # Handle root path requests without auth

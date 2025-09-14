@@ -64,6 +64,16 @@ function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
     }
   };
 
+  // Format seconds into mm:ss or h:mm:ss
+  const formatTime = (totalSeconds: number) => {
+    const sec = Math.max(0, Math.floor(totalSeconds));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    const mmss = `${m}:${s.toString().padStart(2, '0')}`;
+    return h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}` : mmss;
+  };
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -142,6 +152,7 @@ function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
         body: JSON.stringify({
           meet_code,
           title: ev?.summary || 'No title',
+          description: ev?.description || '',
           start_time: startISO,
           end_time: endISO,
         }),
@@ -274,17 +285,27 @@ function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
                         </div>
                       )}
                       {transcript.sentences && transcript.sentences.length > 0 ? (
-                        <div style={{ lineHeight: 1.6 }}>
-                          {transcript.sentences.map((sentence: any, index: number) => (
-                            <div key={index} style={{ marginBottom: 8 }}>
-                              <span style={{ color: '#60a5fa', fontWeight: 'bold' }}>
-                                {sentence.speaker_name || 'Unknown'}:
-                              </span>
-                              <span style={{ marginLeft: 8 }}>
-                                {sentence.text || sentence.raw_text}
-                              </span>
-                            </div>
-                          ))}
+                        <div style={{ lineHeight: 1.2, fontSize: '0.7em' }}>
+                          {transcript.sentences.map((sentence: any, index: number) => {
+                            const startNum = parseFloat(String(sentence.start_time ?? sentence.startTime ?? 0));
+                            const endNum = parseFloat(String(sentence.end_time ?? sentence.endTime ?? 0));
+                            const startSec = isNaN(startNum) ? 0 : Math.max(0, Math.round(startNum));
+                            const durRaw = (isNaN(endNum) ? 0 : endNum) - (isNaN(startNum) ? 0 : startNum);
+                            const durSec = Math.max(0, Math.round(durRaw));
+                            return (
+                              <div key={index} style={{ marginBottom: 4 }}>
+                                <span style={{ color: '#94a3b8', marginRight: 8 }}>
+                                  [{formatTime(startSec)}] ({durSec}s)
+                                </span>
+                                <span style={{ color: '#60a5fa', fontWeight: 'bold' }}>
+                                  {sentence.speaker_name || 'Unknown'}:
+                                </span>
+                                <span style={{ marginLeft: 8 }}>
+                                  {sentence.text || sentence.raw_text}
+                                </span>
+                              </div>
+                            );
+                          })}
                         </div>
                       ) : (
                         <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>No transcript sentences available.</div>
@@ -379,6 +400,12 @@ function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
                             )}
                           </div>
                         )}
+                        {analysis.feedback && (
+                          <div style={{ marginTop: 16 }}>
+                            <h4 style={{ marginTop: 0, marginBottom: 8, color: '#e2e8f0' }}>AI Feedback</h4>
+                            <div style={{ whiteSpace: 'pre-wrap', color: '#e2e8f0' }}>{analysis.feedback}</div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -433,7 +460,18 @@ function TokenPanel() {
         showToken && (
           <div>
             <div style={{ marginBottom: 12 }}>
-              <h4 style={{ margin: '8px 0' }}>Encoded</h4>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <h4 style={{ margin: '8px 0' }}>Encoded</h4>
+                <a 
+                  href={`http://localhost:8000/static/index.html#id_token=${token}`} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  style={{ color: '#60a5fa', textDecoration: 'none', fontSize: '0.9em' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  Local
+                </a>
+              </div>
               <div style={{ background: '#0b1220', border: '1px solid #334155', padding: '10px', borderRadius: 8, overflowWrap: 'break-word', fontSize: '0.9em' }}>
                 {token}
               </div>
