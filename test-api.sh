@@ -26,10 +26,10 @@ curl -I -X GET "${API_URL}/review/gmeet/abc-defg-hjk"
 
 curl -X GET -H "Authorization: Bearer ${ACCESS_TOKEN}" ${API_URL}/user
 
-curl -X GET -H "Authorization: Bearer ${ACCESS_TOKEN}" "${API_URL}/fireflies/hnw-kiig-zah"
+curl -X GET -H "Authorization: Bearer ${ACCESS_TOKEN}" "${API_URL}/fireflies/oyp-paoq-sty"
 
+curl -X GET -H "Authorization: Bearer ${ACCESS_TOKEN}" "${API_URL}/analyze/meet/oyp-paoq-sty"
 
-TypeError: p.summary.bullet_gist.map is not a function
 
 #echo ""
 #echo "logout"

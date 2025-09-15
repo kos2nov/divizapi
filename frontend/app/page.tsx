@@ -374,23 +374,24 @@ function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
                     )}
                     {analysis && (
                       <div>
-                        {analysis.transcript_id && (
-                          <div style={{ marginBottom: 8 }}>
-                            <strong style={{ color: '#94a3b8' }}>Transcript ID:</strong>{' '}
-                            <span style={{ color: '#e2e8f0' }}>{analysis.transcript_id}</span>
+                        {analysis.cached && (
+                          <div style={{ marginBottom: 8, color: '#94a3b8', fontStyle: 'italic' }}>
+                            (Cached result)
                           </div>
                         )}
-                        {analysis.stats && (
+                        {analysis.analysis?.stats && (
                           <div>
                             <div style={{ marginBottom: 8 }}>
                               <strong style={{ color: '#94a3b8' }}>Speaking Duration:</strong>{' '}
-                              <span style={{ color: '#e2e8f0' }}>{analysis.stats.total_duration_minutes} min</span>
+                              <span style={{ color: '#e2e8f0' }}>
+                                {analysis.analysis.stats.total_duration_minutes?.toFixed(2) || '0.00'} min
+                              </span>
                             </div>
-                            {analysis.stats.speaker_minutes && (
+                            {analysis.analysis.stats.speaker_minutes && (
                               <div>
                                 <strong style={{ color: '#94a3b8' }}>Speaker Time:</strong>
                                 <ul style={{ marginTop: 4, paddingLeft: 20 }}>
-                                  {Object.entries(analysis.stats.speaker_minutes).map(([speaker, minutes]: [string, any]) => (
+                                  {Object.entries(analysis.analysis.stats.speaker_minutes).map(([speaker, minutes]: [string, any]) => (
                                     <li key={speaker} style={{ color: '#e2e8f0' }}>
                                       {speaker}: {typeof minutes === 'number' ? minutes.toFixed(2) : minutes} min
                                     </li>
@@ -400,10 +401,10 @@ function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
                             )}
                           </div>
                         )}
-                        {analysis.feedback && (
+                        {analysis.analysis?.feedback && (
                           <div style={{ marginTop: 16 }}>
                             <h4 style={{ marginTop: 0, marginBottom: 8, color: '#e2e8f0' }}>AI Feedback</h4>
-                            <div style={{ whiteSpace: 'pre-wrap', color: '#e2e8f0' }}>{analysis.feedback}</div>
+                            <div style={{ whiteSpace: 'pre-wrap', color: '#e2e8f0' }}>{analysis.analysis.feedback}</div>
                           </div>
                         )}
                       </div>

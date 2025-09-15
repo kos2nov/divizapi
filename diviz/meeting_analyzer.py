@@ -89,13 +89,22 @@ Analyze the meeting transcript against the agenda items and present your finding
 1.  **Agenda Coverage:**
     * List each agenda item.
     * For each item, state whether it was discussed.
-    * If discussed, quote the specific lines or dialogue from the script that correspond to that item. If not discussed, state that.
-    * Example: "Project Zeus Kick-off: Discussed. Relevant script: 'John: "Good morning, everyone. Let's start with our agenda. First, Project Zeus...'"
+    * If discussed, state if the coverage was good, average, or poor. Provide a short explanation for each rating.
+    * Example: "Project Zeus Kick-off: Discussed. Coverage: Good. Explanation: The agenda item was well-discussed and the transcript provided clear and concise information."
 
 2.  **Participant Contributions:**
     * For each participant (e.g., John, Jane, Mike), list the agenda items they contributed to.
-    * Briefly describe the nature of their contribution (e.g., initiating the topic, providing an update, raising a concern).
+    * Describe the nature of their contribution in one sentence (e.g., initiating the topic, providing an update, raising a concern).
     * Example: "John: Contributed to Project Zeus Kick-off (initiated discussion) and Q3 Budget Review (suggested follow-up)."
+
+3. **Distractions:**
+    * List any distractions that occurred during the meeting (e.g., off-topic comments, discussions, personal stories, etc).
+    * For each distraction, list the speaker and the nature of the distraction.
+    * Example: "John: Asked questions about the project Mayfly, which was not on the agenda."
+
+4. **Efficiency:**
+    * Provide list of top 3 contributors and 3 distractors sorted by the magnitute of contributions/distractions.
+    * Exxample: Contributors: John, Jane, Mike. Distractors: Bob, Alice, Tom.
 """
 
         prompt_template = ChatPromptTemplate.from_template(template)
@@ -108,7 +117,7 @@ Analyze the meeting transcript against the agenda items and present your finding
         })
         result = self.openai_client.invoke(prompt)
         response = result.content
-        logger.info("Meeting analysis response: %s", response)
+        logger.info("Meeting analysis response length: %s", len(response))
         return response
 
         
