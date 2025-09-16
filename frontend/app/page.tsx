@@ -501,7 +501,7 @@ export default function Page() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'user' | 'meet'>('user');
+  const [activeTab, setActiveTab] = useState<'user' | 'meet' | 'meetings'>('user');
 
   // Google auth/client state (client-side only)
   const [gapiLoaded, setGapiLoaded] = useState(false);
@@ -509,6 +509,17 @@ export default function Page() {
   const [gisLoaded, setGisLoaded] = useState(false);
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
   const tokenClientRef = useRef<any>(null);
+
+  // Meetings tab state
+  const [meetings, setMeetings] = useState<any[] | null>(null);
+  const [meetingsLoading, setMeetingsLoading] = useState(false);
+  const [meetingsError, setMeetingsError] = useState<string | null>(null);
+  const [selectedMeetingCode, setSelectedMeetingCode] = useState<string | null>(null);
+  const [meetingDetails, setMeetingDetails] = useState<any | null>(null);
+  const [meetingDetailsLoading, setMeetingDetailsLoading] = useState(false);
+  const [meetingDetailsError, setMeetingDetailsError] = useState<string | null>(null);
+  const [detailsAnalyzeLoading, setDetailsAnalyzeLoading] = useState(false);
+  const [detailsAnalyzeError, setDetailsAnalyzeError] = useState<string | null>(null);
 
   // Persisted token storage keys
   const GOOGLE_TOKEN_KEY = 'google_access_token';
@@ -804,9 +815,155 @@ export default function Page() {
     }
   }, [token, router, logout]);
 
+  // Utilities for formatting times/durations
+  const formatClock = (totalSeconds: number) => {
+    const sec = Math.max(0, Math.floor(totalSeconds || 0));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    const mmss = `${m}:${s.toString().padStart(2, '0')}`;
+    return h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}` : mmss;
+  };
+
+  // API durations are minutes
+  const normalizeToMinutes = (val: any): number | null => {
+    const num = Number(val);
+    if (!isFinite(num) || num <= 0) return null;
+    return Math.max(1, Math.round(num));
+  };
+
+
+  const formatDurationMinutes = (val: any) => {
+    const minVal = normalizeToMinutes(val);
+    if (minVal == null) return '—';
+    const h = Math.floor(minVal / 60);
+    const m = minVal % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+
+  const analyzeSelectedMeeting = useCallback(async () => {
+    if (!token || !meetingDetails) return;
+    if (detailsAnalyzeLoading) return;
+    setDetailsAnalyzeLoading(true);
+    setDetailsAnalyzeError(null);
+    try {
+      const meet_code = meetingDetails.meeting_code || selectedMeetingCode || '';
+      const title = meetingDetails.agenda?.title || 'No title';
+      const description = meetingDetails.agenda?.description || '';
+      const startISO = meetingDetails.start_time || meetingDetails.transcript?.date || '';
+      let endISO = startISO;
+      // Duration must come from API in minutes
+      const minutes = normalizeToMinutes(meetingDetails.duration);
+      if (startISO && minutes != null) {
+        const startMs = new Date(startISO).getTime();
+        const endMs = startMs + minutes * 60 * 1000;
+        endISO = new Date(endMs).toISOString();
+      }
+      const resp = await fetch('/api/analyze/meet', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ meet_code, title, description, start_time: startISO, end_time: endISO }),
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || 'Failed to analyze meeting');
+      }
+      const data = await resp.json();
+      setMeetingDetails((prev: any) => ({ ...(prev || {}), analysis: data.analysis }));
+    } catch (e: any) {
+      setDetailsAnalyzeError(e?.message || 'Failed to analyze meeting');
+    } finally {
+      setDetailsAnalyzeLoading(false);
+    }
+  }, [token, meetingDetails, selectedMeetingCode, detailsAnalyzeLoading]);
+
   useEffect(() => {
     fetchUser();
   }, [fetchUser]);
+
+  const fetchMeetings = useCallback(async () => {
+    if (!token) {
+      setMeetings(null);
+      setMeetingsError('Not authenticated');
+      return;
+    }
+    setMeetingsLoading(true);
+    setMeetingsError(null);
+    try {
+      const res = await fetch('/api/meetings', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (res.status === 401) {
+        logout();
+        router.push('/login');
+        return;
+      }
+      if (!res.ok) {
+        throw new Error('Failed to fetch meetings');
+      }
+      const json = await res.json();
+      setMeetings(json || []);
+    } catch (e: any) {
+      console.error('Error fetching meetings:', e);
+      setMeetingsError(e?.message || 'Failed to load meetings');
+      setMeetings(null);
+    } finally {
+      setMeetingsLoading(false);
+    }
+  }, [token, router, logout]);
+
+  const fetchMeetingDetails = useCallback(async (meetingCode: string) => {
+    if (!token) {
+      setMeetingDetails(null);
+      setMeetingDetailsError('Not authenticated');
+      return;
+    }
+    setSelectedMeetingCode(meetingCode);
+    setMeetingDetailsLoading(true);
+    setMeetingDetailsError(null);
+    try {
+      const res = await fetch(`/api/meetings/${encodeURIComponent(meetingCode)}` , {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (res.status === 401) {
+        logout();
+        router.push('/login');
+        return;
+      }
+      if (res.status === 404) {
+        setMeetingDetailsError('Meeting not found');
+        setMeetingDetails(null);
+        return;
+      }
+      if (!res.ok) {
+        throw new Error('Failed to fetch meeting details');
+      }
+      const json = await res.json();
+      setMeetingDetails(json);
+    } catch (e: any) {
+      console.error('Error fetching meeting details:', e);
+      setMeetingDetailsError(e?.message || 'Failed to load meeting details');
+      setMeetingDetails(null);
+    } finally {
+      setMeetingDetailsLoading(false);
+    }
+  }, [token, router, logout]);
+
+  // Auto-load meetings when switching to the Meetings tab
+  useEffect(() => {
+    if (activeTab === 'meetings') {
+      fetchMeetings();
+    }
+  }, [activeTab, fetchMeetings]);
 
   return (
     <>
@@ -923,6 +1080,26 @@ export default function Page() {
             >
               Meet
             </button>
+            <button
+              onClick={() => setActiveTab('meetings')}
+              style={{
+                background: 'transparent',
+                color: activeTab === 'meetings' ? '#fff' : '#94a3b8',
+                border: 'none',
+                borderBottom: activeTab === 'meetings' ? '2px solid #60a5fa' : '2px solid transparent',
+                padding: '12px 24px',
+                cursor: 'pointer',
+                fontSize: 16,
+                fontWeight: activeTab === 'meetings' ? '600' : '400',
+                transition: 'all 0.2s ease',
+                position: 'relative',
+                bottom: '-1px',
+                borderRadius: '4px 4px 0 0',
+                backgroundColor: activeTab === 'meetings' ? 'rgba(96, 165, 250, 0.1)' : 'transparent'
+              }}
+            >
+              Meetings
+            </button>
           </div>
         </div>
       </nav>
@@ -1005,18 +1182,253 @@ export default function Page() {
         </>
       )}
 
-      {activeTab === 'meet' && (
+      <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16, display: activeTab === 'meet' ? 'block' : 'none' }}>
+        <h2 style={{ fontSize: 20, marginTop: 0, marginBottom: 12 }}>Meet</h2>
+        {missingGoogleEnv && (
+          <p style={{ color: '#fca5a5' }}>
+            Missing Google configuration. Please set NEXT_PUBLIC_GOOGLE_CLIENT_ID and NEXT_PUBLIC_GOOGLE_API_KEY in your environment.
+          </p>
+        )}
+        <MeetForm 
+          onSearch={searchMeetByCode} 
+          missingGoogleEnv={missingGoogleEnv}
+        />
+      </section>
+
+      {activeTab === 'meetings' && (
         <section style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16 }}>
-          <h2 style={{ fontSize: 20, marginTop: 0, marginBottom: 12 }}>Meet</h2>
-          {missingGoogleEnv && (
-            <p style={{ color: '#fca5a5' }}>
-              Missing Google configuration. Please set NEXT_PUBLIC_GOOGLE_CLIENT_ID and NEXT_PUBLIC_GOOGLE_API_KEY in your environment.
-            </p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h2 style={{ fontSize: 20, marginTop: 0, marginBottom: 0 }}>Meetings</h2>
+            <button
+              onClick={fetchMeetings}
+              disabled={meetingsLoading}
+              style={{
+                background: 'transparent',
+                border: '1px solid #334155',
+                color: '#e2e8f0',
+                borderRadius: 6,
+                padding: '4px 8px',
+                cursor: 'pointer',
+                opacity: meetingsLoading ? 0.7 : 1,
+                pointerEvents: meetingsLoading ? 'none' : 'auto'
+              }}
+              title="Refresh meetings"
+            >
+              Refresh
+            </button>
+          </div>
+
+          {!token && (
+            <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>Please login to see your meetings.</div>
           )}
-          <MeetForm 
-            onSearch={searchMeetByCode} 
-            missingGoogleEnv={missingGoogleEnv}
-          />
+
+          {meetingsError && <div style={{ color: '#fca5a5' }}>{meetingsError}</div>}
+          {meetingsLoading && <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>Loading meetings...</div>}
+          {!meetingsLoading && meetings && meetings.length === 0 && (
+            <div style={{ color: '#94a3b8' }}>No meetings yet. Analyze a meeting to see it here.</div>
+          )}
+
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #334155', color: '#94a3b8' }}>Code</th>
+                  <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #334155', color: '#94a3b8' }}>Title</th>
+                  <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #334155', color: '#94a3b8' }}>Start</th>
+                  <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #334155', color: '#94a3b8' }}>Duration</th>
+                  <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #334155', color: '#94a3b8' }}>Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Array.isArray(meetings) && meetings.map((m) => (
+                  <tr key={m.meeting_code} style={{ borderBottom: '1px solid #1e293b' }}>
+                    <td style={{ padding: '8px' }}>
+                      <a
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); fetchMeetingDetails(m.meeting_code); }}
+                        style={{ color: '#60a5fa', textDecoration: 'none' }}
+                      >
+                        {m.meeting_code}
+                      </a>
+                    </td>
+                    <td style={{ padding: '8px' }}>{m.title}</td>
+                    <td style={{ padding: '8px' }}>{m.start_time ? new Date(m.start_time).toLocaleString() : '—'}</td>
+                    <td style={{ padding: '8px' }}>{formatDurationMinutes(m.duration)}</td>
+                    <td style={{ padding: '8px' }}>{new Date(m.updated_at).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {(selectedMeetingCode || meetingDetailsLoading || meetingDetails || meetingDetailsError) && (
+            <div style={{ border: '1px solid #334155', borderRadius: 8, padding: 12, background: '#0b1220', marginTop: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ marginTop: 0, marginBottom: 10, fontSize: 18 }}>Details {selectedMeetingCode ? `(${selectedMeetingCode})` : ''}</h3>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {meetingDetails && (
+                    <button
+                      onClick={analyzeSelectedMeeting}
+                      disabled={detailsAnalyzeLoading}
+                      style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #1e293b', background: '#059669', color: '#fff' }}
+                      title="Analyze this meeting"
+                    >
+                      {detailsAnalyzeLoading ? 'Analyzing...' : 'Analyze'}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setSelectedMeetingCode(null); setMeetingDetails(null); setMeetingDetailsError(null); setDetailsAnalyzeError(null); }}
+                    style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #334155', background: 'transparent', color: '#e2e8f0' }}
+                    title="Close details"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+
+              {meetingDetailsLoading && <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>Loading details...</div>}
+              {meetingDetailsError && <div style={{ color: '#fca5a5' }}>{meetingDetailsError}</div>}
+              {detailsAnalyzeError && <div style={{ color: '#fca5a5' }}>{detailsAnalyzeError}</div>}
+
+              {meetingDetails && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', rowGap: 6, columnGap: 10 }}>
+                  <div style={{ color: '#94a3b8' }}>Title</div>
+                  <div>{meetingDetails.agenda?.title || 'Untitled'}</div>
+
+                  <div style={{ color: '#94a3b8' }}>Description</div>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{meetingDetails.agenda?.description || '—'}</div>
+
+                  <div style={{ color: '#94a3b8' }}>Start</div>
+                  <div>{(meetingDetails.start_time || meetingDetails.transcript?.date) ? new Date(meetingDetails.start_time || meetingDetails.transcript?.date).toLocaleString() : '—'}</div>
+
+                  <div style={{ color: '#94a3b8' }}>Duration</div>
+                  <div>{formatDurationMinutes(meetingDetails.duration)}</div>
+
+                  <div style={{ color: '#94a3b8' }}>Created</div>
+                  <div>{new Date(meetingDetails.created_at).toLocaleString()}</div>
+
+                  <div style={{ color: '#94a3b8' }}>Updated</div>
+                  <div>{new Date(meetingDetails.updated_at).toLocaleString()}</div>
+                </div>
+              )}
+
+              {meetingDetails?.transcript && (
+                <div style={{ marginTop: 16, borderTop: '1px solid #334155', paddingTop: 12 }}>
+                  <h4 style={{ marginTop: 0, marginBottom: 8, color: '#e2e8f0' }}>Transcript</h4>
+                  {meetingDetails.transcript.transcript_id && (
+                    <div style={{ marginBottom: 8 }}>
+                      <strong style={{ color: '#94a3b8' }}>Transcript:</strong>{' '}
+                      <a
+                        href={`https://app.fireflies.ai/view/${meetingDetails.transcript.transcript_id}?channelSource=all`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: '#60a5fa' }}
+                      >
+                        {meetingDetails.transcript.transcript_id}
+                      </a>
+                    </div>
+                  )}
+                  <div style={{ maxHeight: 300, overflow: 'auto' }}>
+                    {Array.isArray(meetingDetails.transcript.sentences) && meetingDetails.transcript.sentences.length > 0 ? (
+                      <div style={{ lineHeight: 1.2, fontSize: '0.8em' }}>
+                        {meetingDetails.transcript.sentences.map((s: any, idx: number) => {
+                          const startNum = Number(s.start_time || 0);
+                          const endNum = Number(s.end_time || 0);
+                          const startSec = isFinite(startNum) ? Math.max(0, Math.round(startNum)) : 0;
+                          const durSec = Math.max(0, Math.round((isFinite(endNum) ? endNum : 0) - (isFinite(startNum) ? startNum : 0)));
+                          return (
+                            <div key={idx} style={{ marginBottom: 4 }}>
+                              <span style={{ color: '#94a3b8', marginRight: 8 }}>
+                                [{formatClock(startSec)}] ({durSec}s)
+                              </span>
+                              <span style={{ color: '#60a5fa', fontWeight: 'bold' }}>
+                                {s.speaker_name || 'Unknown'}:
+                              </span>
+                              <span style={{ marginLeft: 8 }}>
+                                {s.text || s.raw_text}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>No transcript sentences available.</div>
+                    )}
+
+                    {meetingDetails.transcript.summary && (
+                      <div style={{ marginTop: 16 }}>
+                        <h5 style={{ margin: 0, marginBottom: 8, color: '#e2e8f0' }}>Summary</h5>
+                        {meetingDetails.transcript.summary.overview && (
+                          <div style={{ marginBottom: 8 }}>
+                            <strong style={{ color: '#94a3b8' }}>Overview:</strong> {meetingDetails.transcript.summary.overview}
+                          </div>
+                        )}
+                        {meetingDetails.transcript.summary.short_summary && (
+                          <div style={{ marginBottom: 8 }}>
+                            <strong style={{ color: '#94a3b8' }}>Short Summary:</strong> {meetingDetails.transcript.summary.short_summary}
+                          </div>
+                        )}
+                        {Array.isArray(meetingDetails.transcript.summary.bullet_gist) && meetingDetails.transcript.summary.bullet_gist.length > 0 && (
+                          <div style={{ marginBottom: 8 }}>
+                            <strong style={{ color: '#94a3b8' }}>Key Points:</strong>
+                            <ul style={{ marginTop: 4, paddingLeft: 20 }}>
+                              {meetingDetails.transcript.summary.bullet_gist.map((p: string, i: number) => (
+                                <li key={i} style={{ color: '#e2e8f0' }}>{p}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {Array.isArray(meetingDetails.transcript.summary.action_items) && meetingDetails.transcript.summary.action_items.length > 0 && (
+                          <div style={{ marginBottom: 8 }}>
+                            <strong style={{ color: '#94a3b8' }}>Action Items:</strong>
+                            <ul style={{ marginTop: 4, paddingLeft: 20 }}>
+                              {meetingDetails.transcript.summary.action_items.map((p: string, i: number) => (
+                                <li key={i} style={{ color: '#e2e8f0' }}>{p}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {meetingDetails?.analysis && (
+                <div style={{ marginTop: 16, borderTop: '1px solid #334155', paddingTop: 12 }}>
+                  <h4 style={{ marginTop: 0, marginBottom: 8, color: '#e2e8f0' }}>Analysis</h4>
+                  {meetingDetails.analysis?.stats && (
+                    <div>
+                      <div style={{ marginBottom: 8 }}>
+                        <strong style={{ color: '#94a3b8' }}>Speaking Duration:</strong>{' '}
+                        <span style={{ color: '#e2e8f0' }}>
+                          {(meetingDetails.analysis.stats.total_duration_minutes ?? 0).toFixed(2)} min
+                        </span>
+                      </div>
+                      {meetingDetails.analysis.stats.speaker_minutes && (
+                        <div>
+                          <strong style={{ color: '#94a3b8' }}>Speaker Time:</strong>
+                          <ul style={{ marginTop: 4, paddingLeft: 20 }}>
+                            {Object.entries(meetingDetails.analysis.stats.speaker_minutes).map(([speaker, minutes]: [string, any]) => (
+                              <li key={speaker} style={{ color: '#e2e8f0' }}>
+                                {speaker}: {typeof minutes === 'number' ? minutes.toFixed(2) : minutes} min
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {meetingDetails.analysis?.feedback && (
+                    <div style={{ marginTop: 16 }}>
+                      <h5 style={{ margin: 0, marginBottom: 8, color: '#e2e8f0' }}>AI Feedback</h5>
+                      <div style={{ whiteSpace: 'pre-wrap', color: '#e2e8f0' }}>{meetingDetails.analysis.feedback}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </section>
       )}
 

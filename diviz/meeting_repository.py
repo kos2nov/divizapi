@@ -2,15 +2,19 @@ from typing import Dict, Optional, List, Any
 from datetime import datetime, timezone
 from pydantic import BaseModel
 
+
 class MeetingAnalysis(BaseModel):
     """Represents the analysis of a meeting."""
     user_id: str
     meeting_code: str
+    start_time: Optional[datetime] = None
+    duration_minutes: Optional[int] = None
     agenda: Dict[str, str]
     transcript: Dict[str, Any]
     analysis: Optional[Dict[str, Any]]
     created_at: datetime
     updated_at: datetime
+
 
 class MeetingRepository:
     """In-memory repository for storing and retrieving meeting analyses."""
@@ -24,7 +28,9 @@ class MeetingRepository:
         meeting_code: str, 
         agenda: Dict[str, str], 
         transcript: Dict[str, Any], 
-        analysis: Optional[Dict[str, Any]] = None
+        analysis: Optional[Dict[str, Any]] = None,
+        start_time: Optional[datetime] = None,
+        duration_minutes: Optional[int] = None,
     ) -> MeetingAnalysis:
         """Save or update a meeting analysis.
         
@@ -42,6 +48,8 @@ class MeetingRepository:
         meeting_analysis = MeetingAnalysis(
             user_id=user_id,
             meeting_code=meeting_code,
+            start_time=start_time,
+            duration_minutes=duration_minutes,
             agenda=agenda,
             transcript=transcript,
             analysis=analysis,

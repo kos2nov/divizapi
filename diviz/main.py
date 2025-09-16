@@ -347,12 +347,32 @@ async def analyze_meet(meet_info: MeetInfo = Body(..., description="Google Meet 
             "description": meet_info.description or ""
         }
 
-        # Store the transcript
+        # Parse start/end and compute duration_seconds from MeetInfo
+        def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
+            if not ts:
+                return None
+            try:
+                # Support trailing 'Z'
+                t = ts.replace('Z', '+00:00') if ts.endswith('Z') else ts
+                return datetime.fromisoformat(t)
+            except Exception:
+                return None
+
+        start_dt = _parse_iso(meet_info.start_time)
+        end_dt = _parse_iso(meet_info.end_time)
+        duration_minutes = None
+        if start_dt and end_dt and end_dt > start_dt:
+            total_seconds = (end_dt - start_dt).total_seconds()
+            duration_minutes = int(round(total_seconds / 60.0))
+
+        # Store the transcript along with timing info
         meeting_repository.save_analysis(
             user_id=user_id,
-            meeting_code=meet_info.description,
+            meeting_code=meet_info.meet_code,
             agenda=agenda,
-            transcript=transcript
+            transcript=transcript,
+            start_time=start_dt,
+            duration_minutes=duration_minutes,
         )
 
         # Analyze the transcript
@@ -366,7 +386,9 @@ async def analyze_meet(meet_info: MeetInfo = Body(..., description="Google Meet 
             meeting_code=meet_info.meet_code,
             agenda=agenda,
             transcript=transcript,
-            analysis=analysis
+            analysis=analysis,
+            start_time=start_dt,
+            duration_minutes=duration_minutes,
         )
 
         return {
@@ -403,19 +425,60 @@ async def list_meetings(
         # Get all analyses for the user
         analyses = meeting_repository.list_user_analyses(user_id)
         
-        # Format the response
-        return [
-            {
-                "meeting_code": analysis.meeting_code,
-                "title": analysis.agenda.get("title", "Untitled Meeting"),
-                "created_at": analysis.created_at.isoformat(),
-                "updated_at": analysis.updated_at.isoformat()
-            }
-            for analysis in analyses
-        ]
+        # Format the response with stored start_time and duration in minutes
+        result = []
+        for a in analyses:
+            start_time_val = a.start_time.isoformat() if getattr(a, "start_time", None) else None
+            duration_val = int(getattr(a, "duration_minutes")) if getattr(a, "duration_minutes", None) is not None else None
+
+            result.append({
+                "meeting_code": a.meeting_code,
+                "title": a.agenda.get("title", "Untitled Meeting"),
+                "start_time": start_time_val,
+                "duration": duration_val,  # minutes
+                "created_at": a.created_at.isoformat(),
+                "updated_at": a.updated_at.isoformat(),
+            })
+
+        return result
     except Exception as e:
         logger.error(f"Error listing meetings: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error listing meetings: {str(e)}")
+
+
+@app.get("/api/meetings/{meeting_code}")
+async def get_meeting_details(
+    meeting_code: str,
+    user_claims: Dict[str, Any] = Security(get_current_user)
+):
+    """
+    Get stored meeting details (agenda, transcript, analysis) for the given meeting_code
+    belonging to the authenticated user.
+    """
+    try:
+        user_id = user_claims.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User ID not found in token")
+
+        record: Optional[MeetingAnalysis] = meeting_repository.get_analysis(user_id, meeting_code)
+        if not record:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        return {
+            "meeting_code": record.meeting_code,
+            "agenda": record.agenda,
+            "transcript": record.transcript,
+            "analysis": record.analysis,
+            "start_time": record.start_time.isoformat(),
+            "duration": record.duration_minutes,
+            "created_at": record.created_at.isoformat(),
+            "updated_at": record.updated_at.isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting meeting details for {meeting_code}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error getting meeting details: {str(e)}")
 
 
 @app.post("/api/analyze/transcript")
@@ -437,8 +500,13 @@ async def analyze_transcript(
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID not found in token")
             
+        start_time = request.get("start_time") or datetime.now(timezone.utc)
+        end_time = request.get("end_time")
+        duration_minutes = None
+        if start_time and end_time:
+            duration_minutes = int((end_time - start_time).total_seconds() / 60)
         # Generate a unique meeting code for direct transcript analysis
-        meeting_code = f"direct-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        meeting_code = f"direct-{start_time.strftime('%Y%m%d%H%M%S')}"
         existing_analysis = meeting_repository.get_analysis(user_id, meeting_code)
         if existing_analysis and existing_analysis.analysis:
             return {
@@ -456,6 +524,8 @@ async def analyze_transcript(
         meeting_repository.save_analysis(
             user_id=user_id,
             meeting_code=meeting_code,
+            start_time=start_time,
+            duration_minutes=duration_minutes,
             agenda=request.agenda,
             transcript=request.transcript,
             analysis=analysis
