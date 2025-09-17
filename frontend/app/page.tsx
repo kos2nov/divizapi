@@ -520,6 +520,8 @@ export default function Page() {
   const [meetingDetailsError, setMeetingDetailsError] = useState<string | null>(null);
   const [detailsAnalyzeLoading, setDetailsAnalyzeLoading] = useState(false);
   const [detailsAnalyzeError, setDetailsAnalyzeError] = useState<string | null>(null);
+  const [deletingCode, setDeletingCode] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Persisted token storage keys
   const GOOGLE_TOKEN_KEY = 'google_access_token';
@@ -814,6 +816,56 @@ export default function Page() {
       setLoading(false);
     }
   }, [token, router, logout]);
+
+  const deleteMeeting = useCallback(async (meetingCode: string) => {
+    if (!token) {
+      setMeetingsError('Not authenticated');
+      return;
+    }
+    if (deletingCode) return;
+    try {
+      if (typeof window !== 'undefined') {
+        const ok = window.confirm('Delete this meeting from your repository? This cannot be undone.');
+        if (!ok) return;
+      }
+    } catch {}
+
+    setDeleteError(null);
+    setDeletingCode(meetingCode);
+    try {
+      const res = await fetch(`/api/meetings/${encodeURIComponent(meetingCode)}` , {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (res.status === 401) {
+        logout();
+        router.push('/login');
+        return;
+      }
+      if (res.status !== 204 && res.status !== 404) {
+        const text = await res.text();
+        throw new Error(text || 'Failed to delete meeting');
+      }
+
+      // Optimistically update the list
+      setMeetings((prev) => Array.isArray(prev) ? prev.filter((m) => m.meeting_code !== meetingCode) : prev);
+      // Clear details if we were viewing this meeting
+      if (selectedMeetingCode === meetingCode) {
+        setSelectedMeetingCode(null);
+        setMeetingDetails(null);
+        setMeetingDetailsError(null);
+        setDetailsAnalyzeError(null);
+      }
+    } catch (e: any) {
+      console.error('Error deleting meeting:', e);
+      setDeleteError(e?.message || 'Failed to delete meeting');
+    } finally {
+      setDeletingCode(null);
+    }
+  }, [token, deletingCode, logout, router, selectedMeetingCode]);
 
   // Utilities for formatting times/durations
   const formatClock = (totalSeconds: number) => {
@@ -1223,6 +1275,7 @@ export default function Page() {
           )}
 
           {meetingsError && <div style={{ color: '#fca5a5' }}>{meetingsError}</div>}
+          {deleteError && <div style={{ color: '#fca5a5' }}>{deleteError}</div>}
           {meetingsLoading && <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>Loading meetings...</div>}
           {!meetingsLoading && meetings && meetings.length === 0 && (
             <div style={{ color: '#94a3b8' }}>No meetings yet. Analyze a meeting to see it here.</div>
@@ -1237,6 +1290,7 @@ export default function Page() {
                   <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #334155', color: '#94a3b8' }}>Start</th>
                   <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #334155', color: '#94a3b8' }}>Duration</th>
                   <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #334155', color: '#94a3b8' }}>Updated</th>
+                  <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #334155', color: '#94a3b8' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1255,6 +1309,16 @@ export default function Page() {
                     <td style={{ padding: '8px' }}>{m.start_time ? new Date(m.start_time).toLocaleString() : '—'}</td>
                     <td style={{ padding: '8px' }}>{formatDurationMinutes(m.duration)}</td>
                     <td style={{ padding: '8px' }}>{new Date(m.updated_at).toLocaleString()}</td>
+                    <td style={{ padding: '8px' }}>
+                      <button
+                        onClick={() => deleteMeeting(m.meeting_code)}
+                        disabled={deletingCode === m.meeting_code}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #7f1d1d', background: '#991b1b', color: '#fff', opacity: deletingCode === m.meeting_code ? 0.7 : 1, cursor: deletingCode === m.meeting_code ? 'not-allowed' : 'pointer' }}
+                        title="Delete this meeting"
+                      >
+                        {deletingCode === m.meeting_code ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -8,7 +8,7 @@ from .meeting_repository import meeting_repository, MeetingAnalysis
 import httpx
 import uvicorn
 from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException, Request, Security, Depends, Body
+from fastapi import FastAPI, HTTPException, Request, Security, Depends, Body, Response
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from google.oauth2.credentials import Credentials
@@ -477,6 +477,32 @@ async def get_meeting_details(
     except Exception as e:
         logger.error(f"Error getting meeting details for {meeting_code}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error getting meeting details: {str(e)}")
+
+
+@app.delete("/api/meetings/{meeting_code}", status_code=204)
+async def delete_meeting(
+    meeting_code: str,
+    user_claims: Dict[str, Any] = Security(get_current_user)
+):
+    """
+    Delete a stored meeting analysis for the given meeting_code belonging to the authenticated user.
+    Returns 204 No Content on success.
+    """
+    try:
+        user_id = user_claims.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="User ID not found in token")
+
+        deleted = meeting_repository.delete_analysis(user_id, meeting_code)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        return Response(status_code=204)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting meeting {meeting_code}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error deleting meeting: {str(e)}")
 
 
 @app.post("/api/analyze/transcript")

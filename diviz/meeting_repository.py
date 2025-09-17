@@ -91,6 +91,27 @@ class MeetingRepository:
             key=lambda x: x.updated_at,
             reverse=True
         )
+    
+    def delete_analysis(self, user_id: str, meeting_code: str) -> bool:
+        """Delete a meeting analysis for a user by meeting code.
+        
+        Args:
+            user_id: The ID of the user who owns the analysis
+            meeting_code: The meeting code/identifier to delete
+        
+        Returns:
+            True if the analysis was deleted, False if it did not exist
+        """
+        user_meetings = self._store.get(user_id)
+        if not user_meetings:
+            return False
+        if meeting_code in user_meetings:
+            del user_meetings[meeting_code]
+            # Clean up empty user bucket to keep store tidy
+            if not user_meetings:
+                del self._store[user_id]
+            return True
+        return False
 
 # Create a singleton instance
 meeting_repository = MeetingRepository()
