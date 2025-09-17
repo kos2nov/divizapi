@@ -104,3 +104,9 @@ Once the service is running, you can access:
 ## Deploying to AWS (optional)
 
 This repo includes an AWS CDK app under `cdk/` that deploys the API behind API Gateway and Lambda. See `cdk/README.md` for details and scripts.
+
+## License
+
+This project is licensed under the MIT License. See the `LICENSE` file for details.
+
+Copyright (c) 2025 Konstantyn Novoselov

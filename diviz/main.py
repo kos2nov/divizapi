@@ -372,7 +372,7 @@ async def analyze_meet(meet_info: MeetInfo = Body(..., description="Google Meet 
             agenda=agenda,
             transcript=transcript,
             start_time=start_dt,
-            duration_minutes=duration_minutes,
+            duration_minutes=duration_minutes
         )
 
         # Analyze the transcript
@@ -388,7 +388,7 @@ async def analyze_meet(meet_info: MeetInfo = Body(..., description="Google Meet 
             transcript=transcript,
             analysis=analysis,
             start_time=start_dt,
-            duration_minutes=duration_minutes,
+            duration_minutes=duration_minutes
         )
 
         return {
@@ -428,14 +428,12 @@ async def list_meetings(
         # Format the response with stored start_time and duration in minutes
         result = []
         for a in analyses:
-            start_time_val = a.start_time.isoformat() if getattr(a, "start_time", None) else None
-            duration_val = int(getattr(a, "duration_minutes")) if getattr(a, "duration_minutes", None) is not None else None
 
             result.append({
                 "meeting_code": a.meeting_code,
                 "title": a.agenda.get("title", "Untitled Meeting"),
-                "start_time": start_time_val,
-                "duration": duration_val,  # minutes
+                "start_time": a.start_time.isoformat(),
+                "duration": a.duration_minutes,  # minutes
                 "created_at": a.created_at.isoformat(),
                 "updated_at": a.updated_at.isoformat(),
             })
