@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional, List
 from datetime import datetime, UTC, timedelta
 from .meeting_repository import meeting_repository, MeetingAnalysis
 
+import hmac
+import hashlib
 import httpx
 import uvicorn
 from pydantic import BaseModel
@@ -84,6 +86,8 @@ ALLOWED_GROUPS = [g.strip() for g in os.getenv("COGNITO_ALLOWED_GROUPS", "").spl
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+
+FIREFLIES_WEBHOOK_SECRET = os.getenv("FIREFLIES_WEBHOOK_SECRET") or os.getenv("WEBHOOK_SECRET")
 
 logger.info("COGNITO_USER_POOL_ID = %s", COGNITO_USER_POOL_ID)
 
@@ -165,6 +169,42 @@ if os.getenv("STAGE") == "prod":
         # Add HSTS header for browsers
         response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
         return response
+
+
+@app.post("/webhooks/fireflies")
+async def fireflies_webhook(request: Request):
+    """Webhook endpoint that verifies HMAC signature.
+
+    Expects header 'x-hub-signature' with value 'sha256=<hexdigest>' where the digest is
+    computed over the exact raw request body using the shared secret.
+    """
+    if not FIREFLIES_WEBHOOK_SECRET:
+        logger.error("Webhook secret is not configured. Set FIREFLIES_WEBHOOK_SECRET or WEBHOOK_SECRET.")
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+
+    # Read raw body for signature verification
+    raw_body: bytes = await request.body()
+
+    # Support both 'x-hub-signature' and 'x-hub-signature-256' just in case
+    signature = request.headers.get("x-hub-signature") or request.headers.get("x-hub-signature-256")
+    if not signature:
+        logger.warning("Missing x-hub-signature header on webhook request")
+        raise HTTPException(status_code=401, detail="Missing signature")
+
+    expected = "sha256=" + hmac.new(FIREFLIES_WEBHOOK_SECRET.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(signature, expected):
+        logger.warning("Invalid webhook signature")
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    # Parse JSON body after verification
+    try:
+        event = await request.json()
+    except Exception:
+        event = None
+
+    logger.info("Received webhook event: %s", event)
+    return {"status": "ok"}
 
 
 async def get_google_credentials(
