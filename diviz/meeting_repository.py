@@ -22,7 +22,7 @@ class MeetingRepository:
     def __init__(self):
         self._store: Dict[str, Dict[str, MeetingAnalysis]] = {}
     
-    def save_analysis(
+    def save(
         self, 
         user_id: str, 
         meeting_code: str, 
@@ -32,7 +32,7 @@ class MeetingRepository:
         start_time: Optional[datetime] = None,
         duration_minutes: Optional[int] = None,
     ) -> MeetingAnalysis:
-        """Save or update a meeting analysis.
+        """Save or update a meeting record.
         
         Args:
             user_id: The ID of the user who owns this analysis
@@ -63,8 +63,17 @@ class MeetingRepository:
         self._store[user_id][meeting_code] = meeting_analysis
         return meeting_analysis
     
-    def get_analysis(self, user_id: str, meeting_code: str) -> Optional[MeetingAnalysis]:
-        """Retrieve a meeting analysis by user ID and meeting code.
+    def update(self, user_id: str, meeting: MeetingAnalysis) -> MeetingAnalysis:
+        """Update an existing meeting record."""
+        if user_id not in self._store:
+            raise ValueError(f"User {user_id} not found")
+        if meeting.meeting_code not in self._store[user_id]:
+            raise ValueError(f"Meeting {meeting.meeting_code} not found for user {user_id}")
+        self._store[user_id][meeting.meeting_code] = meeting
+        return meeting
+
+    def get(self, user_id: str, meeting_code: str) -> Optional[MeetingAnalysis]:
+        """Retrieve a meeting by user ID and meeting code.
         
         Args:
             user_id: The ID of the user who owns the analysis
@@ -76,8 +85,8 @@ class MeetingRepository:
         user_meetings = self._store.get(user_id, {})
         return user_meetings.get(meeting_code)
     
-    def list_user_analyses(self, user_id: str) -> List[MeetingAnalysis]:
-        """List all meeting analyses for a user.
+    def list_user_meetings(self, user_id: str) -> List[MeetingAnalysis]:
+        """List all stored meetings for a user.
         
         Args:
             user_id: The ID of the user
@@ -92,15 +101,15 @@ class MeetingRepository:
             reverse=True
         )
     
-    def delete_analysis(self, user_id: str, meeting_code: str) -> bool:
-        """Delete a meeting analysis for a user by meeting code.
+    def delete(self, user_id: str, meeting_code: str) -> bool:
+        """Delete a stored meeting for a user by meeting code.
         
         Args:
             user_id: The ID of the user who owns the analysis
             meeting_code: The meeting code/identifier to delete
         
         Returns:
-            True if the analysis was deleted, False if it did not exist
+            True if the record was deleted, False if it did not exist
         """
         user_meetings = self._store.get(user_id)
         if not user_meetings:

@@ -16,16 +16,16 @@ type MeetFormProps = {
 };
 
 function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState('akt-naws-ktv');
   const [result, setResult] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [transcript, setTranscript] = useState<any>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
-  const [analysis, setAnalysis] = useState<any>(null);
-  const [analysisLoading, setAnalysisLoading] = useState(false);
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<any>(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
 
   const { token } = useAuth();
 
@@ -81,8 +81,8 @@ function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
     setResult(null);
     setTranscript(null);
     setTranscriptError(null);
-    setAnalysis(null);
-    setAnalysisError(null);
+    setImportResult(null);
+    setImportError(null);
     
     try {
       if (missingGoogleEnv) {
@@ -121,15 +121,15 @@ function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
   })();
 
   const onAnalyze = async () => {
-    if (analysisLoading) return;
+    if (importLoading) return;
     if (!token) {
-      setAnalysisError('Authentication required for analysis');
+      setImportError('Authentication required for import');
       return;
     }
     const firstMatch = result?.matches && result.matches.length > 0 ? result.matches[0] : null;
     const ev = firstMatch?.event;
     if (!ev) {
-      setAnalysisError('No meeting selected to analyze');
+      setImportError('No meeting selected to import');
       return;
     }
 
@@ -139,11 +139,11 @@ function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
     const startISO = ev?.start?.dateTime || ev?.start?.date || '';
     const endISO = ev?.end?.dateTime || ev?.end?.date || '';
 
-    setAnalysisLoading(true);
-    setAnalysisError(null);
-    setAnalysis(null);
+    setImportLoading(true);
+    setImportError(null);
+    setImportResult(null);
     try {
-      const resp = await fetch('/api/analyze/meet/', {
+      const resp = await fetch('/api/meetings', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -159,14 +159,14 @@ function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
       });
       if (!resp.ok) {
         const text = await resp.text();
-        throw new Error(text || 'Failed to analyze meeting');
+        throw new Error(text || 'Failed to import meeting');
       }
       const data = await resp.json();
-      setAnalysis(data);
+      setImportResult(data);
     } catch (error: any) {
-      setAnalysisError(error?.message || 'Failed to analyze meeting');
+      setImportError(error?.message || 'Failed to import meeting');
     } finally {
-      setAnalysisLoading(false);
+      setImportLoading(false);
     }
   };
 
@@ -190,11 +190,11 @@ function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
             <button
               type="button"
               onClick={onAnalyze}
-              disabled={analysisLoading}
-              style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #1e293b', background: '#059669', color: '#fff', opacity: analysisLoading ? 0.7 : 1, cursor: analysisLoading ? 'not-allowed' : 'pointer' }}
-              title="Analyze this meeting"
+              disabled={importLoading}
+              style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #1e293b', background: '#059669', color: '#fff', opacity: importLoading ? 0.7 : 1, cursor: importLoading ? 'not-allowed' : 'pointer' }}
+              title="Import this meeting"
             >
-              {analysisLoading ? 'Analyzing...' : 'Analyze'}
+              {importLoading ? 'Importing...' : 'Import'}
             </button>
           )}
         </div>
@@ -363,54 +363,6 @@ function MeetForm({ onSearch, missingGoogleEnv }: MeetFormProps) {
                     <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>No transcript available yet.</div>
                   )}
                 </div>
-                {(analysisLoading || analysisError || analysis) && (
-                  <div style={{ border: '1px solid #334155', borderRadius: 8, padding: 12, background: '#0b1220' }}>
-                    <h3 style={{ marginTop: 0, marginBottom: 10, fontSize: 18 }}>Analysis</h3>
-                    {analysisLoading && (
-                      <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>Analyzing meeting...</div>
-                    )}
-                    {analysisError && (
-                      <div style={{ color: '#fca5a5' }}>{analysisError}</div>
-                    )}
-                    {analysis && (
-                      <div>
-                        {analysis.cached && (
-                          <div style={{ marginBottom: 8, color: '#94a3b8', fontStyle: 'italic' }}>
-                            (Cached result)
-                          </div>
-                        )}
-                        {analysis.analysis?.stats && (
-                          <div>
-                            <div style={{ marginBottom: 8 }}>
-                              <strong style={{ color: '#94a3b8' }}>Speaking Duration:</strong>{' '}
-                              <span style={{ color: '#e2e8f0' }}>
-                                {analysis.analysis.stats.total_duration_minutes?.toFixed(2) || '0.00'} min
-                              </span>
-                            </div>
-                            {analysis.analysis.stats.speaker_minutes && (
-                              <div>
-                                <strong style={{ color: '#94a3b8' }}>Speaker Time:</strong>
-                                <ul style={{ marginTop: 4, paddingLeft: 20 }}>
-                                  {Object.entries(analysis.analysis.stats.speaker_minutes).map(([speaker, minutes]: [string, any]) => (
-                                    <li key={speaker} style={{ color: '#e2e8f0' }}>
-                                      {speaker}: {typeof minutes === 'number' ? minutes.toFixed(2) : minutes} min
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        {analysis.analysis?.feedback && (
-                          <div style={{ marginTop: 16 }}>
-                            <h4 style={{ marginTop: 0, marginBottom: 8, color: '#e2e8f0' }}>AI Feedback</h4>
-                            <div style={{ whiteSpace: 'pre-wrap', color: '#e2e8f0' }}>{analysis.analysis.feedback}</div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             );
           })()
@@ -710,8 +662,9 @@ export default function Page() {
 
     const now = Date.now();
     const tdelta = 30 * 24 * 60 * 60 * 1000;
+    const aweek = 7 * 24 * 60 * 60 * 1000;
     const timeMin = new Date(now - tdelta).toISOString();
-    const timeMax = new Date(now).toISOString();
+    const timeMax = new Date(now + aweek).toISOString();
 
     // Search each calendar for events containing the code
     const searched: any[] = [];
@@ -900,24 +853,11 @@ export default function Page() {
     setDetailsAnalyzeError(null);
     try {
       const meet_code = meetingDetails.meeting_code || selectedMeetingCode || '';
-      const title = meetingDetails.agenda?.title || 'No title';
-      const description = meetingDetails.agenda?.description || '';
-      const startISO = meetingDetails.start_time || meetingDetails.transcript?.date || '';
-      let endISO = startISO;
-      // Duration must come from API in minutes
-      const minutes = normalizeToMinutes(meetingDetails.duration);
-      if (startISO && minutes != null) {
-        const startMs = new Date(startISO).getTime();
-        const endMs = startMs + minutes * 60 * 1000;
-        endISO = new Date(endMs).toISOString();
-      }
-      const resp = await fetch('/api/analyze/meet', {
+      const resp = await fetch(`/api/analyze/${encodeURIComponent(meet_code)}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ meet_code, title, description, start_time: startISO, end_time: endISO }),
       });
       if (!resp.ok) {
         const text = await resp.text();
