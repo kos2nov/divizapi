@@ -1218,7 +1218,7 @@ export default function Page() {
           {deleteError && <div style={{ color: '#fca5a5' }}>{deleteError}</div>}
           {meetingsLoading && <div style={{ color: '#94a3b8', fontStyle: 'italic' }}>Loading meetings...</div>}
           {!meetingsLoading && meetings && meetings.length === 0 && (
-            <div style={{ color: '#94a3b8' }}>No meetings yet. Analyze a meeting to see it here.</div>
+            <div style={{ color: '#94a3b8' }}>No meetings yet. Import a meeting to see it here.</div>
           )}
 
           <div style={{ overflowX: 'auto' }}>

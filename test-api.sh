@@ -37,3 +37,6 @@ curl -X GET -H "Authorization: Bearer ${ACCESS_TOKEN}" "${API_URL}/analyze/meet/
 
 
 uv run python analyzer.py ./transcripts/agenda.json ./transcripts/transcript.json --api-url http://localhost:8000
+
+
+curl -X POST -H "x-hub-signature: sha256=${FIREFLIES_WEBHOOK_SECRET}" "${API_URL}/webhooks/fireflies"

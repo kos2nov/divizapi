@@ -371,25 +371,14 @@ async def analyze_meet(meet_code: str,
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
 
-        # Get transcript from Fireflies
-        transcript = await get_fireflies_transcript(
-            meet_code=meet_code,
-            days=30,  # Look back 30 days for the meeting
-            user_claims=user_claims
-        )
-        
-        if not transcript:
+        if not meeting.transcript:
             raise HTTPException(status_code=404, detail="Transcript not found")
         
-        agenda = {
-            "title": meeting.agenda.get("title", ""),
-            "description": meeting.agenda.get("description", "")
-        }
 
         # Analyze the transcript
         analyzer = MeetingAnalyzer()
 
-        analysis = analyzer.analyze(agenda, transcript)
+        analysis = analyzer.analyze(meeting.agenda, meeting.transcript)
         meeting.analysis = analysis
         
         # Store the analysis
@@ -420,20 +409,12 @@ async def create_meeting(
     try:
         user_id = user_claims["sub"]
 
-        # Check if we already have a record for this meeting and reuse transcript if present
-        existing = meeting_repository.get(user_id, meet_info.meet_code)
-        transcript = existing.transcript if existing else None
-
-        if not transcript:
-            # Get transcript from Fireflies
-            transcript = await get_fireflies_transcript(
-                meet_code=meet_info.meet_code,
-                days=30,  # Look back 30 days for the meeting
-                user_claims=user_claims,
-            )
-
-        if not transcript:
-            raise HTTPException(status_code=404, detail="Transcript not found")
+        # Get transcript from Fireflies
+        transcript = await get_fireflies_transcript(
+            meet_code=meet_info.meet_code,
+            days=30,  # Look back 30 days for the meeting
+            user_claims=user_claims,
+        )
 
         agenda = {
             "title": meet_info.title,
@@ -469,7 +450,6 @@ async def create_meeting(
 
         return {
             "meet_code": meet_info.meet_code,
-            "cached": existing is not None,
             "status": "success",
         }
     except HTTPException:
