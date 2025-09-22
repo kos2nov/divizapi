@@ -38,6 +38,39 @@ def empty_messages():
 
 
 # ---------------------------------------------------------------------------
+# Authenticated client fixture and helpers for protected endpoints
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def auth_claims():
+    """Default fake user claims used to bypass Cognito in tests."""
+    return {"sub": "test-user", "email": "test@example.com", "cognito:username": "tester"}
+
+
+@pytest.fixture
+def auth_client(auth_claims):
+    """Test client with dependency override to simulate an authenticated user.
+    Also ensures the in-memory meeting repository is clean before and after tests.
+    """
+    from diviz.main import get_current_user
+    import diviz.main as m
+
+    async def _override_user():
+        return auth_claims
+
+    # Override auth dependency and clear repo state
+    app.dependency_overrides[get_current_user] = _override_user
+    m.meeting_repository._store.clear()
+
+    client = TestClient(app)
+    try:
+        yield client
+    finally:
+        app.dependency_overrides.clear()
+        m.meeting_repository._store.clear()
+
+
+# ---------------------------------------------------------------------------
 # Test selection: skip integration tests by default unless --run-integration
 # ---------------------------------------------------------------------------
 
