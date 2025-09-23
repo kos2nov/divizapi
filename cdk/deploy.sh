@@ -83,15 +83,8 @@ else
     pip install --target lambda_package --no-cache-dir -r cdk/requirements.lambda.txt
 fi
 
-# Write the explicit Lambda handler
-cat > lambda_package/lambda_handler.py << 'EOF'
-from mangum import Mangum
-from diviz.main import app
-handler = Mangum(app, lifespan="off")
-
-def lambda_handler(event, context):
-    return handler(event, context)
-EOF
+# Include explicit Lambda handler from repository
+cp lambda/lambda_handler.py lambda_package/lambda_handler.py
 
 # Clean unnecessary caches
 find lambda_package -name "*.pyc" -delete
