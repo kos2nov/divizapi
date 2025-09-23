@@ -77,10 +77,10 @@ class DivizApiStack(Stack):
             cognito_user_pools=[user_pool]
         )
 
-        # Reference existing certificate for diviz.knovoselov.com
+        # Reference existing certificate for API custom domain
         certificate = acm.Certificate.from_certificate_arn(
             self, "DivizCertificate",
-            certificate_arn="arn:aws:acm:us-east-2:110007951910:certificate/d1e6d4ca-7ccc-4dfa-ba07-d1018291da65"
+            certificate_arn=conf.get("ACM_CERTIFICATE_ARN")
         )
 
         # Create API Gateway with custom domain
@@ -97,7 +97,7 @@ class DivizApiStack(Stack):
                 allow_headers=["Content-Type", "Authorization"]
             ),
             deploy_options=apigateway.StageOptions(
-                stage_name="prod",
+                stage_name=conf.get("STAGE", "prod"),
                 throttling_rate_limit=10,
                 throttling_burst_limit=20
             )
@@ -106,24 +106,24 @@ class DivizApiStack(Stack):
         # Import existing custom domain
         domain = apigateway.DomainName.from_domain_name_attributes(
             self, "DivizApiDomain",
-            domain_name="diviz.knovoselov.com",
-            domain_name_alias_target="d-60kuz6b2f7.execute-api.us-east-2.amazonaws.com",
-            domain_name_alias_hosted_zone_id="ZOJJZC49E0EPZ"
+            domain_name=conf.get("API_DOMAIN_NAME"),
+            domain_name_alias_target=conf.get("API_DOMAIN_ALIAS_TARGET"),
+            domain_name_alias_hosted_zone_id=conf.get("API_DOMAIN_ALIAS_HOSTED_ZONE_ID")
         )
 
         # Note: Base path mapping already exists for this domain
 
-        # Reference existing hosted zone for knovoselov.com
+        # Reference existing hosted zone for the root domain
         hosted_zone = route53.HostedZone.from_lookup(
-            self, "KnovoselovZone",
-            domain_name="knovoselov.com"
+            self, "AppHostedZone",
+            domain_name=conf.get("HOSTED_ZONE_NAME")
         )
 
-        # Create A record for diviz.knovoselov.com
+        # Create A record for the API subdomain
         route53.ARecord(
             self, "DivizARecord",
             zone=hosted_zone,
-            record_name="diviz",
+            record_name=conf.get("API_SUBDOMAIN", "diviz"),
             target=route53.RecordTarget.from_alias(
                 targets.ApiGatewayDomain(domain)
             )
@@ -187,12 +187,12 @@ class DivizApiStack(Stack):
         # Output Cognito Auth URLs
         cdk.CfnOutput(
             self, "CognitoLoginUrl",
-            value="https://auth.diviz.knovoselov.com/login",
+            value=f"{conf.get('COGNITO_DOMAIN_URL')}/login",
             description="Cognito Hosted UI login URL (add client_id and redirect_uri params)"
         )
 
         cdk.CfnOutput(
             self, "CognitoLogoutUrl",
-            value="https://auth.diviz.knovoselov.com/logout",
+            value=f"{conf.get('COGNITO_DOMAIN_URL')}/logout",
             description="Cognito Hosted UI logout URL (add client_id and logout_uri params)"
         )

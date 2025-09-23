@@ -82,6 +82,7 @@ COGNITO_REGION = os.getenv("COGNITO_REGION")
 COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID")
 COGNITO_APP_CLIENT_ID = os.getenv("COGNITO_APP_CLIENT_ID")
 COGNITO_APP_CLIENT_SECRET = os.getenv("COGNITO_APP_CLIENT_SECRET")
+COGNITO_DOMAIN_URL = os.getenv("COGNITO_DOMAIN_URL")
 ALLOWED_GROUPS = [g.strip() for g in os.getenv("COGNITO_ALLOWED_GROUPS", "").split(",") if g.strip()]
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
@@ -619,7 +620,10 @@ async def auth_callback(code: str):
     """
 
     # Exchange code for tokens with Cognito
-    token_endpoint = f"https://auth.diviz.knovoselov.com/oauth2/token"
+    if not COGNITO_DOMAIN_URL:
+        logger.error("COGNITO_DOMAIN_URL is not configured")
+        raise HTTPException(status_code=500, detail="COGNITO_DOMAIN_URL not configured")
+    token_endpoint = f"{COGNITO_DOMAIN_URL.rstrip('/')}/oauth2/token"
 
     # Create Basic auth header with client credentials
     auth_string = f"{COGNITO_APP_CLIENT_ID}:{COGNITO_APP_CLIENT_SECRET}"

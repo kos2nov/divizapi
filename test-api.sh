@@ -1,42 +1,66 @@
+#!/usr/bin/env bash
 
+set -euo pipefail
 
-export CLIENT_ID="5tb6pekknkes6eair7o39b3hh7"
+# Load env from project root if present
+if [ -f ".env" ]; then
+  echo "Loading .env"
+  set -a
+  # shellcheck disable=SC1091
+  source ./.env
+  set +a
+fi
+
+CLIENT_ID="${COGNITO_APP_CLIENT_ID:-}" 
+if [ -z "${CLIENT_ID}" ]; then
+  echo "Warning: COGNITO_APP_CLIENT_ID is not set; set it in .env to construct login URL"
+fi
+
+# Determine base URL
+if [ "${LOCAL_DEV:-false}" = "true" ] || [ -z "${BASE_URL:-}" ]; then
+  BASE="http://localhost:8000"
+else
+  BASE="${BASE_URL}"
+fi
+
+API_URL="${BASE}/api"
 
 echo ""
 echo "Root endpoint: "
-curl -X GET "${API_URL}"
+curl -s -X GET "${API_URL%/}/.." | jq . || curl -X GET "${API_URL%/}/.."
 
-export LOGIN_URL="https://auth.diviz.knovoselov.com/login?client_id=${CLIENT_ID}&response_type=code&scope=email+openid+profile&redirect_uri=https%3A%2F%2Fdiviz.knovoselov.com%2Fauth%2Fcallback"
+# Build Cognito Hosted UI login URL if possible
+if [ -n "${CLIENT_ID}" ] && [ -n "${COGNITO_DOMAIN_URL:-}" ]; then
+  REDIRECT_URI="${BASE}/auth/callback"
+  # URL-encode redirect_uri via python
+  if command -v python3 >/dev/null 2>&1; then
+    REDIRECT_URI_ENC=$(python3 - <<PY
+import urllib.parse, os
+print(urllib.parse.quote(os.environ['REDIRECT_URI'], safe=''))
+PY
+)
+  else
+    REDIRECT_URI_ENC="${REDIRECT_URI}"
+  fi
+  LOGIN_URL="${COGNITO_DOMAIN_URL%/}/login?client_id=${CLIENT_ID}&response_type=code&scope=email+openid+profile&redirect_uri=${REDIRECT_URI_ENC}"
+  echo ""
+  echo "Login URL: ${LOGIN_URL}"
+fi
 
-echo ""
-echo "Login URL: ${LOGIN_URL}"
-#curl "${LOGIN_URL}"
+# ACCESS_TOKEN should be exported in the environment for protected endpoints
+if [ -z "${ACCESS_TOKEN:-}" ]; then
+  echo "Note: ACCESS_TOKEN not set; protected endpoints will fail with 401"
+fi
 
-#export API_URL="https://diviz.knovoselov.com/api"
-export API_URL="http://localhost:8000/api"
-export ACCESS_TOKEN="eyJraWQiOiJyZW5laHBEZmh0TW5FS0V5akNocTlOMmIrMHlXZEtJbUxNWFFxQnhETUdJPSIsImFsZyI6IlJTMjU2In0.eyJhdF9oYXNoIjoiU2JQNWN6dU1rbGg5bFRPNGVVTzNqQSIsInN1YiI6ImUxOWI3NTkwLWUwMDEtNzBmNy1jNTZlLWM3NjIxODYwMmE2YiIsImN1c3RvbTpnb29nZV9leHAiOiIzNTk5IiwiY29nbml0bzpncm91cHMiOlsidXMtZWFzdC0yX0dTTmRyS0RYRV9Hb29nbGUiXSwiZW1haWxfdmVyaWZpZWQiOmZhbHNlLCJpc3MiOiJodHRwczpcL1wvY29nbml0by1pZHAudXMtZWFzdC0yLmFtYXpvbmF3cy5jb21cL3VzLWVhc3QtMl9HU05kcktEWEUiLCJjb2duaXRvOnVzZXJuYW1lIjoiZ29vZ2xlXzExMTAxNzc0NjI4MzEyNzUyMzg5MSIsImN1c3RvbTpnb29nZV9hY2Nlc3MiOiJ5YTI5LmEwQVMzSDZOeVI2UVJmQTYtR0tURDE5QXI0dFVRVGE0VV9ERzEzVDl1aGlMUF8zSzUxbVk0Q0R6dEMtTTBPb2FJMzNHRk9OaWFvVFhzTkg3QnBqcU91X1RCNnFnaWR5MERyT0lqMzRKNlpOUjJsbW9mVlcxWVNLSzVlZ1FWdVNTS1MxMmpGZXRIamZmSWxzcHhoUzdCd3JfUWRlX01BNllKdkx6ZTZZZDBqb096TVBvaVVOdmt5Uk9SQXBaNU91YmNRY3hJRlM4elFhQ2dZS0FjQVNBUklTRlFIR1gyTWlnNjhTTWN3a012bU5FZVRQS2dITk9BMDIwNyIsIm5vbmNlIjoiWThvSk5aZUNpVGR1WFpVbWc3R21xeW96OHU5Z2RuOHhWQ1M2YzhaMkxJaHFVdHNsUWllbk42ckwyU0RsbnI4NGhkcDFxbUNOd3lMYlFBOXNHbW9tbWI5eUozV0dHZ2hTd2VVaFcwQUp0SDZXT1ROa0RZeHptZ0JuM1JrTjNEcjBkLXVWTU9HX01uZWxQT0U3RXFhb0JNV2FKWWdaZEJiVzBQZGotbWtBYW84Iiwib3JpZ2luX2p0aSI6IjcwNjkxYzY2LWU1MmEtNGY2OC04NTBjLTk2ZDBmYmJkNGYxNCIsImF1ZCI6IjV0YjZwZWtrbmtlczZlYWlyN28zOWIzaGg3IiwiaWRlbnRpdGllcyI6W3siZGF0ZUNyZWF0ZWQiOiIxNzU2NzcyNjg2MDczIiwidXNlcklkIjoiMTExMDE3NzQ2MjgzMTI3NTIzODkxIiwicHJvdmlkZXJOYW1lIjoiR29vZ2xlIiwicHJvdmlkZXJUeXBlIjoiR29vZ2xlIiwiaXNzdWVyIjpudWxsLCJwcmltYXJ5IjoidHJ1ZSJ9XSwidG9rZW5fdXNlIjoiaWQiLCJhdXRoX3RpbWUiOjE3NTc4Nzc0MTYsIm5hbWUiOiJLb25zdGFudHluIE5vdm9zZWxvdiIsImV4cCI6MTc1Nzg4MTAxNiwiaWF0IjoxNzU3ODc3NDE2LCJqdGkiOiI0MjY3NWQ1Mi02NTAwLTQ4ZjUtYjQwNy1hZTZjNDUyNmY0MzQiLCJlbWFpbCI6Imtub3Zvc2Vsb3ZAZ21haWwuY29tIn0.TBVAJIfTU-2SRbhLlTjI1fqErermWYGUgcZreduBwhHNRWxc1L8V8oNPsOqkUDEzZj9jfAsqHCivU0xD851k_e6gqSP6ADmGLvTrUvu79JUC1g912R2qRvVtdq9wl20Ivw0rIy9uzfCdPn_u_4qPIWNTQjta_lPkrp_015D5a6NQ-3107d-U1o3aaHQM2T1yBEP8g-ihcJLfgLSdLHOZAiKiwCXhO5-Nc-duUvS6k1fiZLSHvAFmA7MdmR7SdPmEqpIiDk856DeBeibVKFXV0pYOMEC3RL7cyJUIAKFihGFsVzZEbougMcw2mvASEXjrkMS7dPiS1GwIzTozSc0cYg"
+# Example calls
+curl -s -X GET "${API_URL}/user" -H "Authorization: Bearer ${ACCESS_TOKEN:-}" | jq . || true
+curl -s -X GET "${API_URL}/fireflies/oyp-paoq-sty" -H "Authorization: Bearer ${ACCESS_TOKEN:-}" | jq . || true
+curl -s -X GET "${API_URL}/analyze/oyp-paoq-sty" -H "Authorization: Bearer ${ACCESS_TOKEN:-}" | jq . || true
 
+# Run analyzer helper (requires ACCESS_TOKEN)
+uv run python analyzer.py ./transcripts/agenda.json ./transcripts/transcript.json --api-url "${BASE}"
 
-echo ""
-echo "Review endpoint (should return 401 without auth):"
-curl -I -X GET "${API_URL}/review/gmeet/abc-defg-hjk"
-
-
-
-
-curl -X GET -H "Authorization: Bearer ${ACCESS_TOKEN}" ${API_URL}/user
-
-curl -X GET -H "Authorization: Bearer ${ACCESS_TOKEN}" "${API_URL}/fireflies/oyp-paoq-sty"
-
-curl -X GET -H "Authorization: Bearer ${ACCESS_TOKEN}" "${API_URL}/analyze/meet/oyp-paoq-sty"
-
-
-#echo ""
-#echo "logout"
-# curl -I -X GET "https://auth.diviz.knovoselov.com/logout?client_id=5tb6pekknkes6eair7o39b3hh7&logout_uri=https%3A%2F%2Fdiviz.knovoselov.com"
-
-
-uv run python analyzer.py ./transcripts/agenda.json ./transcripts/transcript.json --api-url http://localhost:8000
-
-
-curl -X POST -H "x-hub-signature: sha256=${FIREFLIES_WEBHOOK_SECRET}" "${API_URL}/webhooks/fireflies"
+# Webhook signature example (requires FIREFLIES_WEBHOOK_SECRET)
+if [ -n "${FIREFLIES_WEBHOOK_SECRET:-}" ]; then
+  curl -X POST -H "x-hub-signature: sha256=${FIREFLIES_WEBHOOK_SECRET}" "${API_URL}/webhooks/fireflies"
+fi
