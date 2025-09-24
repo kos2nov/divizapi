@@ -65,7 +65,7 @@ class DivizApiStack(Stack):
             }
         )
 
-        # Reference existing Cognito User Pool
+        # Reference existing Cognito User Pool 
         user_pool = cognito.UserPool.from_user_pool_id(
             self, "DivizUserPool",
             user_pool_id=conf.get("COGNITO_USER_POOL_ID")

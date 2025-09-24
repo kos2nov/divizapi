@@ -106,7 +106,7 @@ uv run cdk deploy --require-approval never --progress events
 
 # Clean up
 echo "🧹 Cleaning up..."
-rm -rf lambda_package 
+#rm -rf lambda_package 
 
 echo "✅ Optimized deployment completed!"
 echo "📋 Check CloudFormation outputs for your API Gateway URL"
