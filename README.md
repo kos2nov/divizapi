@@ -1,4 +1,4 @@
-# DiViz API (FastAPI)
+# DiViz API (FastAPI) and a SPA (Next.js)
 
 A small FastAPI service with a root info endpoint and a simple review endpoint.
 
@@ -38,6 +38,8 @@ uv run python -m diviz.main
 
 The service will be available at http://localhost:8000
 
+Load the UI from http://localhost:8000/static/index.html 
+
 ## Testing
 
 ### Run tests
@@ -65,35 +67,6 @@ python run_tests.py
 - tests/test_api.py — Integration tests for FastAPI endpoints
 - tests/conftest.py — Shared pytest fixtures and configuration
 
-## API Endpoints
-
-### GET /
-Returns service information and available endpoints.
-
-Example response:
-```json
-{
-  "service": "Echo Service",
-  "version": "1.0.0",
-  "endpoints": {
-    "/review": "GET - meeting review"
-  }
-}
-```
-
-### GET /review/meet/{google_meet}
-Returns the provided Google Meet code for demonstration.
-
-Example:
-```bash
-curl "http://localhost:8000/review/meet/abc-defg-hjk"
-```
-Response:
-```json
-{
-  "meeting_code": "abc-defg-hjk"
-}
-```
 
 ## API Documentation
 
@@ -101,9 +74,22 @@ Once the service is running, you can access:
 - Swagger UI: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
 
-## Deploying to AWS (optional)
+## Deploying to AWS
 
-This repo includes an AWS CDK app under `cdk/` that deploys the API behind API Gateway and Lambda. See `cdk/README.md` for details and scripts.
+This repo includes an AWS CDK app under `cdk/` that deploys the API behind API Gateway, Lambda, and Cognito. For prerequisites, first-time setup, and the optimized `./deploy.sh` workflow, follow the step-by-step guide in `cdk/README.md`.
+
+## Analyzing a meeting transcript
+
+The `analyzer.py` script can be used to analyze a meeting transcript. It takes two arguments:
+- agenda_file: Path to the agenda JSON file
+- transcript_file: Path to the transcript JSON file
+
+Example:
+```bash
+python analyzer.py agenda.json transcript.json
+```
+
+The `analyzer_api.py` script can be used to analyze a meeting transcript via the API.
 
 ## License
 

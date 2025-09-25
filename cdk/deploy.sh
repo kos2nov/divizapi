@@ -102,11 +102,11 @@ fi
 
 # Deploy with optimizations
 echo "🚀 Deploying stack..."
-uv run cdk deploy --require-approval never --progress events
+uv run cdk deploy --require-approval never --progress events DivizApiStack
 
 # Clean up
 echo "🧹 Cleaning up..."
-#rm -rf lambda_package 
+rm -rf lambda_package 
 
 echo "✅ Optimized deployment completed!"
 echo "📋 Check CloudFormation outputs for your API Gateway URL"
