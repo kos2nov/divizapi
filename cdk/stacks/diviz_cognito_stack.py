@@ -1,5 +1,6 @@
 import aws_cdk as cdk
 from aws_cdk import aws_cognito as cognito
+from aws_cdk import aws_certificatemanager as certificatemanager
 from constructs import Construct
 
 from pathlib import Path
@@ -30,14 +31,14 @@ class CognitoUserPoolStack(cdk.Stack):
             standard_attributes=cognito.StandardAttributes(
                 email=cognito.StandardAttribute(required=True, mutable=False),
                 fullname=cognito.StandardAttribute(required=True, mutable=True),
-                profile_page=cognito.StandardAttribute(required=False, mutable=True),
             ),
             # Custom user attributes
-            custom_attributes={
-                "google_access": cognito.StringAttribute(mutable=True),
-                "google_refresh": cognito.StringAttribute(mutable=True),
-                "google_exp": cognito.StringAttribute(mutable=True),
-            },
+            # custom_attributes={
+            #     "google_access": cognito.StringAttribute(mutable=True),
+            #     "google_refresh": cognito.StringAttribute(mutable=True),
+            #     "google_exp": cognito.StringAttribute(mutable=True),
+            # },
+
             # Password policy
             password_policy=cognito.PasswordPolicy(
                 min_length=8,
@@ -74,9 +75,14 @@ class CognitoUserPoolStack(cdk.Stack):
                 "https://www.googleapis.com/auth/calendar.readonly",
             ],
             "attribute_mapping": cognito.AttributeMapping(
-                email=cognito.ProviderAttribute.GOOGLE_EMAIL,
-                fullname=cognito.ProviderAttribute.GOOGLE_NAME,
+                email=cognito.ProviderAttribute.other("email"),
+                fullname=cognito.ProviderAttribute.other("name"),
                 preferred_username=cognito.ProviderAttribute.other("sub"),
+                # custom = {
+                #     "google_access": cognito.ProviderAttribute.other("access_token"),
+                #     "google_refresh": cognito.ProviderAttribute.other("refresh_token"),
+                #     "google_exp": cognito.ProviderAttribute.other("expires_in"),
+                # }
             ),
         }
 
@@ -94,7 +100,7 @@ class CognitoUserPoolStack(cdk.Stack):
 
         google_provider = cognito.UserPoolIdentityProviderGoogle(
             self,
-            "GoogleProvider",
+            "Google",
             **_google_idp_kwargs,
         )
 
@@ -126,7 +132,7 @@ class CognitoUserPoolStack(cdk.Stack):
             id_token_validity=cdk.Duration.hours(1),
             refresh_token_validity=cdk.Duration.days(30),
             # Security settings
-            # generate_secret=False,  # Set to True if you need a client secret
+            generate_secret=True,  
             prevent_user_existence_errors=True,
             # Supported identity providers
             supported_identity_providers=[
@@ -138,14 +144,25 @@ class CognitoUserPoolStack(cdk.Stack):
         # Ensure the client is created after the IdP to avoid "provider does not exist" during deployment
         user_pool_client.node.add_dependency(google_provider)
 
-        # Create User Pool Domain (if needed)
-        cognito.UserPoolDomain(
-            self,
-            "DivizUserPoolDomain",
-            user_pool=user_pool,
+        domain_prefix = conf.get("COGNITO_DOMAIN_PREFIX")
+        user_pool.add_domain("CognitoDomain",
             cognito_domain=cognito.CognitoDomainOptions(
-                domain_prefix=conf.get("COGNITO_DOMAIN_PREFIX")
+                domain_prefix=domain_prefix
+            )
+        )
+        certificate_arn = conf.get("AUTH_DOMAIN_CERTIFICATE_ARN")
+        domain_cert = certificatemanager.Certificate.from_certificate_arn(self, "domainCert", certificate_arn)
+
+        domain =user_pool.add_domain("CustomDomain",
+            custom_domain=cognito.CustomDomainOptions(
+                domain_name=domain_prefix + "." + conf.get("API_DOMAIN_NAME"),
+                certificate=domain_cert,
             ),
+        )
+
+        domain.sign_in_url(user_pool_client,
+            redirect_uri=conf.get("BASE_URL") + "/auth/callback",
+            sign_in_path="/static/index.html",
         )
 
         # Outputs
